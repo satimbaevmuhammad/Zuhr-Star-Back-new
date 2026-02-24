@@ -82,6 +82,10 @@ const studentSchema = new mongoose.Schema(
 			default: 0,
 			min: 0,
 		},
+		balanceResetAt: {
+			type: Date,
+			default: Date.now,
+		},
 		coinBalance: {
 			type: Number,
 			default: 0,
@@ -112,6 +116,7 @@ studentSchema.pre('validate', function (next) {
 
 const hideSensitiveFields = (doc, ret) => {
 	delete ret.password
+	delete ret.balanceResetAt
 	return ret
 }
 

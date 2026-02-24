@@ -4,9 +4,9 @@ const User = require('../model/user.model')
 const { verifyAccessToken } = require('../utils/token')
 
 const ROLE_PERMISSIONS = Object.freeze({
-	teacher: ['profile:read', 'students:read'],
-	supporteacher: ['profile:read', 'students:read'],
-	headteacher: ['profile:read', 'users:read', 'students:read'],
+	teacher: ['profile:read', 'students:read', 'groups:read'],
+	supporteacher: ['profile:read', 'students:read', 'groups:read'],
+	headteacher: ['profile:read', 'users:read', 'students:read', 'student:manage', 'groups:read', 'groups:manage'],
 	admin: [
 		'profile:read',
 		'users:read',
@@ -14,6 +14,8 @@ const ROLE_PERMISSIONS = Object.freeze({
 		'users:manage_roles',
 		'students:read',
 		'students:manage',
+		'groups:read',
+		'groups:manage',
 	],
 	superadmin: ['*'],
 })
@@ -42,15 +44,7 @@ const canCreateRoleViaRegister = (actorRole, targetRole) => {
 		return false
 	}
 
-	if (actorRole === 'superadmin') {
-		return ['teacher', 'supporteacher', 'headteacher', 'admin'].includes(targetRole)
-	}
-
-	if (actorRole === 'admin') {
-		return ['teacher', 'supporteacher', 'headteacher'].includes(targetRole)
-	}
-
-	return false
+	return actorRole === 'superadmin' && ['teacher', 'supporteacher', 'headteacher', 'admin'].includes(targetRole)
 }
 
 const requireAuth = async (req, res, next) => {
@@ -137,8 +131,7 @@ const requireRegisterPermission = (req, res, next) => {
 			if (!canCreate) {
 				removeUploadedFileIfAny(req)
 				return res.status(403).json({
-					message:
-						'Forbidden: only superadmin can create admin, and admin can create only teacher/supporteacher/headteacher',
+					message: 'Forbidden: only superadmin can register employees',
 				})
 			}
 

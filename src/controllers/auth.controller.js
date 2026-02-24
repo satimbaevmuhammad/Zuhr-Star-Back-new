@@ -15,7 +15,6 @@ const ALLOWED_ROLES = new Set([
 ])
 
 const PHONE_PATTERN = /^\+?[0-9]{7,15}$/
-const ADMIN_REGISTERABLE_ROLES = new Set(['teacher', 'supporteacher', 'headteacher'])
 const SUPERADMIN_REGISTERABLE_ROLES = new Set([
 	'teacher',
 	'supporteacher',
@@ -155,17 +154,12 @@ exports.register = async (req, res) => {
 		}
 
 		const creatorRole = req.user.role
-		let canCreateRequestedRole = false
-		if (creatorRole === 'superadmin') {
-			canCreateRequestedRole = SUPERADMIN_REGISTERABLE_ROLES.has(requestedRole)
-		} else if (creatorRole === 'admin') {
-			canCreateRequestedRole = ADMIN_REGISTERABLE_ROLES.has(requestedRole)
-		}
+		const canCreateRequestedRole =
+			creatorRole === 'superadmin' && SUPERADMIN_REGISTERABLE_ROLES.has(requestedRole)
 
 		if (!canCreateRequestedRole) {
 			return res.status(403).json({
-				message:
-					'Forbidden: only superadmin can create admin, and admin can create only teacher/supporteacher/headteacher',
+				message: 'Forbidden: only superadmin can register employees',
 			})
 		}
 

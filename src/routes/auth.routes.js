@@ -16,7 +16,7 @@ const router = express.Router()
  *   post:
  *     tags: [Auth]
  *     summary: Register a user
- *     description: Register is protected. Superadmin can create teacher/supporteacher/headteacher/admin. Admin can create teacher/supporteacher/headteacher.
+ *     description: Register is protected. Only superadmin can create teacher/supporteacher/headteacher/admin. Employees cannot self-register.
  *     security:
  *       - bearerAuth: []
  *     requestBody:

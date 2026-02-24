@@ -13,8 +13,10 @@ const filesToCheck = [
 	'src/middleware/upload.middleware.js',
 	'src/routes/auth.routes.js',
 	'src/routes/student.routes.js',
+	'src/routes/group.routes.js',
 	'src/controllers/auth.controller.js',
 	'src/controllers/student.controller.js',
+	'src/controllers/group.controller.js',
 	'src/model/user.model.js',
 	'src/model/student.model.js',
 	'src/model/group.model.js',
@@ -156,8 +158,8 @@ const run = async () => {
 			body: { role: 'headteacher' },
 			headers: { authorization: `Bearer ${adminToken}` },
 		})
-		assert.strictEqual(adminHeadteacherCreateCheck.nextCalled, true)
-		assert.strictEqual(adminHeadteacherCreateCheck.res.body, null)
+		assert.strictEqual(adminHeadteacherCreateCheck.nextCalled, false)
+		assert.strictEqual(adminHeadteacherCreateCheck.res.statusCode, 403)
 
 		const adminCreatesAdminCheck = await callMiddleware({
 			body: { role: 'admin' },

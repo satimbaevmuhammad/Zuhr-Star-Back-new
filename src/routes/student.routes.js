@@ -43,6 +43,73 @@ router.get('/', allowPermissions('students:read'), studentController.getStudents
 
 /**
  * @swagger
+ * /api/students/{studentId}/groups:
+ *   get:
+ *     tags: [Students]
+ *     summary: List groups connected to a student
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: studentId
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: membershipStatus
+ *         schema:
+ *           type: string
+ *           enum: [active, paused, completed, left]
+ *     responses:
+ *       200:
+ *         description: Student groups list
+ *       400:
+ *         description: Invalid request
+ *       404:
+ *         description: Student not found
+ */
+router.get(
+	'/:studentId/groups',
+	allowPermissions('students:read', 'groups:read'),
+	studentController.getStudentGroups,
+)
+
+/**
+ * @swagger
+ * /api/students/{studentId}/reward-coins:
+ *   post:
+ *     tags: [Students]
+ *     summary: Reward student with coins
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: studentId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/StudentCoinRewardInput'
+ *     responses:
+ *       200:
+ *         description: Coins added successfully
+ *       400:
+ *         description: Validation failed
+ *       404:
+ *         description: Student not found
+ */
+router.post(
+	'/:studentId/reward-coins',
+	allowPermissions('students:manage'),
+	studentController.rewardStudentCoins,
+)
+
+/**
+ * @swagger
  * /api/students/{studentId}:
  *   get:
  *     tags: [Students]
@@ -107,9 +174,8 @@ router.get('/:studentId', allowPermissions('students:read'), studentController.g
  *               groups:
  *                 type: array
  *                 items:
- *                   oneOf:
- *                     - type: string
- *                     - $ref: '#/components/schemas/StudentGroupInput'
+ *                   type: string
+ *                 example: ["65f12ca7a7720c194de6a011", "65f12ca7a7720c194de6a012"]
  *     responses:
  *       201:
  *         description: Student created
@@ -168,9 +234,8 @@ router.post('/', allowPermissions('students:manage'), studentController.createSt
  *               groups:
  *                 type: array
  *                 items:
- *                   oneOf:
- *                     - type: string
- *                     - $ref: '#/components/schemas/StudentGroupInput'
+ *                   type: string
+ *                 example: ["65f12ca7a7720c194de6a011", "65f12ca7a7720c194de6a012"]
  *     responses:
  *       200:
  *         description: Student updated

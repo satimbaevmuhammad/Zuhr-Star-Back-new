@@ -106,6 +106,22 @@ const groupSchema = new mongoose.Schema(
 				message: 'Support teachers list cannot contain duplicates',
 			},
 		},
+		students: {
+			type: [
+				{
+					type: mongoose.Schema.Types.ObjectId,
+					ref: 'Student',
+				},
+			],
+			default: [],
+			validate: {
+				validator: value => {
+					const ids = value.map(item => item.toString())
+					return new Set(ids).size === ids.length
+				},
+				message: 'Students list cannot contain duplicates',
+			},
+		},
 		maxStudents: {
 			type: Number,
 			default: 15,
@@ -187,6 +203,7 @@ const groupSchema = new mongoose.Schema(
 
 groupSchema.index({ name: 1, startDate: 1 }, { unique: true })
 groupSchema.index({ teacher: 1, status: 1 })
+groupSchema.index({ students: 1 })
 groupSchema.index({ 'attendance.student': 1, 'attendance.date': 1 })
 
 module.exports = mongoose.model('Group', groupSchema)

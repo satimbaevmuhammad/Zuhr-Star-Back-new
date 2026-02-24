@@ -1,11 +1,14 @@
 const bcrypt = require('bcrypt')
 const mongoose = require('mongoose')
 
+const Group = require('../model/group.model')
 const Student = require('../model/student.model')
+const { resetStudentBalancesIfNeeded } = require('../services/student-balance-reset.service')
 
 const PHONE_PATTERN = /^\+?[0-9]{7,15}$/
+const STUDENT_GROUP_STATUSES = ['active', 'paused', 'completed', 'left']
 
-const parseGroups = input => {
+const parseGroupIds = input => {
 	if (typeof input === 'undefined') {
 		return undefined
 	}
@@ -15,7 +18,7 @@ const parseGroups = input => {
 		try {
 			groups = JSON.parse(input)
 		} catch (error) {
-			return null
+			groups = [input.trim()]
 		}
 	}
 
@@ -23,33 +26,88 @@ const parseGroups = input => {
 		return null
 	}
 
-	const normalized = []
+	const normalizedIds = []
 	for (const item of groups) {
-		if (typeof item === 'string') {
-			if (!mongoose.isValidObjectId(item)) {
-				return null
-			}
-			normalized.push({ group: item, status: 'active' })
-			continue
-		}
-
-		if (!item || typeof item !== 'object' || !item.group) {
+		const groupId = String(item || '').trim()
+		if (!groupId || !mongoose.isValidObjectId(groupId)) {
 			return null
 		}
-
-		if (!mongoose.isValidObjectId(item.group)) {
-			return null
-		}
-
-		normalized.push({
-			group: item.group,
-			status: item.status || 'active',
-			joinedAt: item.joinedAt,
-			note: item.note,
-		})
+		normalizedIds.push(groupId)
 	}
 
-	return normalized
+	const uniqueIds = [...new Set(normalizedIds)]
+	if (uniqueIds.length !== normalizedIds.length) {
+		return null
+	}
+
+	return uniqueIds
+}
+
+const toStudentGroupMemberships = groupIds =>
+	groupIds.map(groupId => ({
+		group: groupId,
+		status: 'active',
+	}))
+
+const syncGroupStudentLinks = async ({ studentId, previousGroupIds = [], nextGroupIds = [] }) => {
+	const previousSet = new Set(previousGroupIds.map(groupId => String(groupId)))
+	const nextSet = new Set(nextGroupIds.map(groupId => String(groupId)))
+
+	const groupsToAdd = [...nextSet].filter(groupId => !previousSet.has(groupId))
+	const groupsToRemove = [...previousSet].filter(groupId => !nextSet.has(groupId))
+	const normalizedStudentId = new mongoose.Types.ObjectId(String(studentId))
+	const groupsToAddObjectIds = groupsToAdd.map(groupId => new mongoose.Types.ObjectId(groupId))
+	const groupsToRemoveObjectIds = groupsToRemove.map(
+		groupId => new mongoose.Types.ObjectId(groupId),
+	)
+
+	if (groupsToAdd.length > 0) {
+		await Group.updateMany(
+			{ _id: { $in: groupsToAddObjectIds } },
+			[
+				{
+					$set: {
+						students: {
+							$cond: [{ $isArray: '$students' }, '$students', []],
+						},
+					},
+				},
+				{
+					$set: {
+						students: {
+							$setUnion: ['$students', [normalizedStudentId]],
+						},
+					},
+				},
+			],
+		)
+	}
+
+	if (groupsToRemove.length > 0) {
+		await Group.updateMany(
+			{ _id: { $in: groupsToRemoveObjectIds } },
+			[
+				{
+					$set: {
+						students: {
+							$cond: [{ $isArray: '$students' }, '$students', []],
+						},
+					},
+				},
+				{
+					$set: {
+						students: {
+							$filter: {
+								input: '$students',
+								as: 'studentRef',
+								cond: { $ne: ['$$studentRef', normalizedStudentId] },
+							},
+						},
+					},
+				},
+			],
+		)
+	}
 }
 
 const parseBirthDate = value => {
@@ -57,8 +115,113 @@ const parseBirthDate = value => {
 	return Number.isNaN(date.getTime()) ? null : date
 }
 
+const runBalanceResetSafely = async () => {
+	try {
+		await resetStudentBalancesIfNeeded()
+	} catch (error) {
+		console.error('Student balance reset check failed:', error)
+	}
+}
+
+const countActiveMembershipsByGroupIds = async (groupIds, { excludeStudentId } = {}) => {
+	if (!Array.isArray(groupIds) || groupIds.length === 0) {
+		return new Map()
+	}
+
+	const objectIds = groupIds.map(groupId => new mongoose.Types.ObjectId(groupId))
+	const matchStage = {
+		groups: {
+			$elemMatch: {
+				group: { $in: objectIds },
+				status: 'active',
+			},
+		},
+	}
+
+	if (excludeStudentId && mongoose.isValidObjectId(excludeStudentId)) {
+		matchStage._id = { $ne: new mongoose.Types.ObjectId(excludeStudentId) }
+	}
+
+	const stats = await Student.aggregate([
+		{
+			$match: matchStage,
+		},
+		{
+			$unwind: '$groups',
+		},
+		{
+			$match: {
+				'groups.group': { $in: objectIds },
+				'groups.status': 'active',
+			},
+		},
+		{
+			$group: {
+				_id: '$groups.group',
+				studentsCount: { $sum: 1 },
+			},
+		},
+	])
+
+	const countsMap = new Map()
+	for (const item of stats) {
+		countsMap.set(item._id.toString(), item.studentsCount)
+	}
+
+	return countsMap
+}
+
+const validateGroupAssignments = async (groupIds, { excludeStudentId } = {}) => {
+	if (!Array.isArray(groupIds) || groupIds.length === 0) {
+		return null
+	}
+
+	const groupDocs = await Group.find({ _id: { $in: groupIds } }).select('_id status maxStudents')
+
+	if (groupDocs.length !== groupIds.length) {
+		const found = new Set(groupDocs.map(group => group._id.toString()))
+		const missing = groupIds.filter(groupId => !found.has(groupId))
+		return {
+			statusCode: 400,
+			message: `One or more groups were not found: ${missing.join(', ')}`,
+		}
+	}
+
+	const groupsById = new Map(groupDocs.map(group => [group._id.toString(), group]))
+	const activeGroupIds = [...new Set(groupIds.map(groupId => String(groupId)))]
+
+	for (const activeGroupId of activeGroupIds) {
+		const linkedGroup = groupsById.get(activeGroupId)
+		if (linkedGroup && ['completed', 'archived'].includes(linkedGroup.status)) {
+			return {
+				statusCode: 400,
+				message: 'Cannot attach an active student membership to completed or archived groups',
+			}
+		}
+	}
+
+	const activeCounts = await countActiveMembershipsByGroupIds(activeGroupIds, {
+		excludeStudentId,
+	})
+
+	for (const activeGroupId of activeGroupIds) {
+		const linkedGroup = groupsById.get(activeGroupId)
+		const currentActiveCount = activeCounts.get(activeGroupId) || 0
+		if (linkedGroup && currentActiveCount >= linkedGroup.maxStudents) {
+			return {
+				statusCode: 409,
+				message: `Group ${activeGroupId} has reached maxStudents limit`,
+			}
+		}
+	}
+
+	return null
+}
+
 exports.createStudent = async (req, res) => {
 	try {
+		await runBalanceResetSafely()
+
 		const fullname = String(req.body.fullname || '').trim()
 		const studentPhone = String(req.body.studentPhone || '').trim()
 		const parentPhone = String(req.body.parentPhone || '').trim()
@@ -67,7 +230,7 @@ exports.createStudent = async (req, res) => {
 			.toLowerCase()
 		const password = req.body.password
 		const note = req.body.note ? String(req.body.note).trim() : undefined
-		const groups = parseGroups(req.body.groups)
+		const groups = parseGroupIds(req.body.groups)
 		const birthDate = parseBirthDate(req.body.birthDate)
 
 		if (!fullname || !studentPhone || !parentPhone || !gender || !birthDate || !password) {
@@ -91,9 +254,15 @@ exports.createStudent = async (req, res) => {
 
 		if (typeof req.body.groups !== 'undefined' && !groups) {
 			return res.status(400).json({
-				message:
-					'groups must be an array of group objects or group ObjectId strings',
+				message: 'groups must be an array of group ObjectId strings',
 			})
+		}
+
+		if (groups) {
+			const groupValidation = await validateGroupAssignments(groups)
+			if (groupValidation) {
+				return res.status(groupValidation.statusCode).json({ message: groupValidation.message })
+			}
 		}
 
 		const existingStudent = await Student.findOne({ studentPhone })
@@ -115,10 +284,23 @@ exports.createStudent = async (req, res) => {
 		}
 
 		if (groups) {
-			studentPayload.groups = groups
+			studentPayload.groups = toStudentGroupMemberships(groups)
 		}
 
 		const student = await Student.create(studentPayload)
+		if (groups && groups.length > 0) {
+			try {
+				await syncGroupStudentLinks({
+					studentId: student._id,
+					previousGroupIds: [],
+					nextGroupIds: groups,
+				})
+			} catch (syncError) {
+				await Student.findByIdAndDelete(student._id).catch(() => {})
+				throw syncError
+			}
+		}
+
 		return res.status(201).json({
 			message: 'Student created successfully',
 			student,
@@ -144,6 +326,8 @@ exports.createStudent = async (req, res) => {
 
 exports.getStudents = async (req, res) => {
 	try {
+		await runBalanceResetSafely()
+
 		const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100)
 		const page = Math.max(Number(req.query.page) || 1, 1)
 		const skip = (page - 1) * limit
@@ -181,6 +365,8 @@ exports.getStudents = async (req, res) => {
 
 exports.getStudentById = async (req, res) => {
 	try {
+		await runBalanceResetSafely()
+
 		const studentId = req.params.studentId
 		if (!mongoose.isValidObjectId(studentId)) {
 			return res.status(400).json({ message: 'Invalid student id' })
@@ -201,8 +387,108 @@ exports.getStudentById = async (req, res) => {
 	}
 }
 
+exports.getStudentGroups = async (req, res) => {
+	try {
+		await runBalanceResetSafely()
+
+		const studentId = req.params.studentId
+		if (!mongoose.isValidObjectId(studentId)) {
+			return res.status(400).json({ message: 'Invalid student id' })
+		}
+
+		const membershipStatus = String(req.query.membershipStatus || '')
+			.trim()
+			.toLowerCase()
+
+		if (membershipStatus && !STUDENT_GROUP_STATUSES.includes(membershipStatus)) {
+			return res.status(400).json({
+				message: 'membershipStatus must be one of active, paused, completed, left',
+			})
+		}
+
+		const student = await Student.findById(studentId).populate(
+			'groups.group',
+			'name course level status teacher supportTeachers maxStudents startDate endDate schedule room monthlyFee',
+		)
+		if (!student) {
+			return res.status(404).json({ message: 'Student not found' })
+		}
+
+		let groups = student.groups
+		if (membershipStatus) {
+			groups = groups.filter(groupItem => groupItem.status === membershipStatus)
+		}
+
+		const normalizedGroups = groups.map(groupItem => ({
+			group: groupItem.group,
+			status: groupItem.status,
+			joinedAt: groupItem.joinedAt,
+			note: groupItem.note,
+		}))
+
+		return res.status(200).json({
+			studentId: student._id,
+			groupAttached: student.groupAttached,
+			totalGroups: normalizedGroups.length,
+			groups: normalizedGroups,
+		})
+	} catch (error) {
+		console.error('Get student groups failed:', error)
+		return res.status(500).json({ message: 'Internal server error' })
+	}
+}
+
+exports.rewardStudentCoins = async (req, res) => {
+	try {
+		await runBalanceResetSafely()
+
+		const studentId = req.params.studentId
+		if (!mongoose.isValidObjectId(studentId)) {
+			return res.status(400).json({ message: 'Invalid student id' })
+		}
+
+		const amount = Number(req.body.amount)
+		if (!Number.isInteger(amount) || amount <= 0) {
+			return res.status(400).json({ message: 'amount must be a positive integer' })
+		}
+
+		const note =
+			typeof req.body.note === 'undefined' ? undefined : String(req.body.note || '').trim()
+		if (typeof note !== 'undefined' && note.length > 300) {
+			return res.status(400).json({ message: 'note must be 300 characters or less' })
+		}
+
+		const student = await Student.findById(studentId)
+		if (!student) {
+			return res.status(404).json({ message: 'Student not found' })
+		}
+
+		student.coinBalance += amount
+		await student.save()
+
+		return res.status(200).json({
+			message: 'Student rewarded with coins successfully',
+			rewardedCoins: amount,
+			note: note || null,
+			student,
+		})
+	} catch (error) {
+		if (error.name === 'ValidationError') {
+			const firstErrorMessage = Object.values(error.errors || {})[0]?.message
+			return res
+				.status(400)
+				.json({ message: firstErrorMessage || 'Validation failed' })
+		}
+
+		console.error('Reward student coins failed:', error)
+		return res.status(500).json({ message: 'Internal server error' })
+	}
+}
+
 exports.updateStudent = async (req, res) => {
 	try {
+		await runBalanceResetSafely()
+
 		const studentId = req.params.studentId
 		if (!mongoose.isValidObjectId(studentId)) {
 			return res.status(400).json({ message: 'Invalid student id' })
@@ -285,14 +571,21 @@ exports.updateStudent = async (req, res) => {
 		}
 
 		if (typeof req.body.groups !== 'undefined') {
-			const groups = parseGroups(req.body.groups)
+			const groups = parseGroupIds(req.body.groups)
 			if (!groups) {
 				return res.status(400).json({
-					message:
-						'groups must be an array of group objects or group ObjectId strings',
+					message: 'groups must be an array of group ObjectId strings',
 				})
 			}
-			updatePayload.groups = groups
+
+			const groupValidation = await validateGroupAssignments(groups, {
+				excludeStudentId: studentId,
+			})
+			if (groupValidation) {
+				return res.status(groupValidation.statusCode).json({ message: groupValidation.message })
+			}
+
+			updatePayload.groups = toStudentGroupMemberships(groups)
 		}
 
 		const student = await Student.findById(studentId)
@@ -300,8 +593,19 @@ exports.updateStudent = async (req, res) => {
 			return res.status(404).json({ message: 'Student not found' })
 		}
 
+		const previousGroupIds = student.groups.map(groupItem => groupItem.group.toString())
+
 		Object.assign(student, updatePayload)
 		await student.save()
+
+		if (typeof req.body.groups !== 'undefined') {
+			const nextGroupIds = student.groups.map(groupItem => groupItem.group.toString())
+			await syncGroupStudentLinks({
+				studentId,
+				previousGroupIds,
+				nextGroupIds,
+			})
+		}
 
 		const updatedStudent = await Student.findById(studentId).populate(
 			'groups.group',
@@ -333,6 +637,8 @@ exports.updateStudent = async (req, res) => {
 
 exports.deleteStudent = async (req, res) => {
 	try {
+		await runBalanceResetSafely()
+
 		const studentId = req.params.studentId
 		if (!mongoose.isValidObjectId(studentId)) {
 			return res.status(400).json({ message: 'Invalid student id' })
@@ -341,6 +647,17 @@ exports.deleteStudent = async (req, res) => {
 		const deletedStudent = await Student.findByIdAndDelete(studentId)
 		if (!deletedStudent) {
 			return res.status(404).json({ message: 'Student not found' })
+		}
+
+		const previousGroupIds = (deletedStudent.groups || []).map(groupItem =>
+			groupItem.group.toString(),
+		)
+		if (previousGroupIds.length > 0) {
+			await syncGroupStudentLinks({
+				studentId,
+				previousGroupIds,
+				nextGroupIds: [],
+			})
 		}
 
 		return res.status(200).json({ message: 'Student deleted successfully' })
