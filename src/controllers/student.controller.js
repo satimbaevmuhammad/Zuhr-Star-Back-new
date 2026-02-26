@@ -4,6 +4,7 @@ const mongoose = require('mongoose')
 const Group = require('../model/group.model')
 const Student = require('../model/student.model')
 const { resetStudentBalancesIfNeeded } = require('../services/student-balance-reset.service')
+const { stack } = require('../routes/group.routes')
 
 const PHONE_PATTERN = /^\+?[0-9]{7,15}$/
 const STUDENT_GROUP_STATUSES = ['active', 'paused', 'completed', 'left']
@@ -49,64 +50,72 @@ const toStudentGroupMemberships = groupIds =>
 		status: 'active',
 	}))
 
+const normalizeObjectIdArray = values => {
+	if (!Array.isArray(values)) {
+		return []
+	}
+
+	const seen = new Set()
+	const normalized = []
+	for (const value of values) {
+		const id = String(value || '').trim()
+		if (!id || !mongoose.isValidObjectId(id) || seen.has(id)) {
+			continue
+		}
+		seen.add(id)
+		normalized.push(new mongoose.Types.ObjectId(id))
+	}
+
+	return normalized
+}
+
 const syncGroupStudentLinks = async ({ studentId, previousGroupIds = [], nextGroupIds = [] }) => {
 	const previousSet = new Set(previousGroupIds.map(groupId => String(groupId)))
 	const nextSet = new Set(nextGroupIds.map(groupId => String(groupId)))
 
 	const groupsToAdd = [...nextSet].filter(groupId => !previousSet.has(groupId))
 	const groupsToRemove = [...previousSet].filter(groupId => !nextSet.has(groupId))
-	const normalizedStudentId = new mongoose.Types.ObjectId(String(studentId))
-	const groupsToAddObjectIds = groupsToAdd.map(groupId => new mongoose.Types.ObjectId(groupId))
-	const groupsToRemoveObjectIds = groupsToRemove.map(
-		groupId => new mongoose.Types.ObjectId(groupId),
-	)
+
+	const normalizedStudentId = String(studentId)
 
 	if (groupsToAdd.length > 0) {
-		await Group.updateMany(
-			{ _id: { $in: groupsToAddObjectIds } },
-			[
-				{
-					$set: {
-						students: {
-							$cond: [{ $isArray: '$students' }, '$students', []],
-						},
-					},
+		const groups = await Group.find({ _id: { $in: groupsToAdd } }).select('_id students')
+		const updates = groups.map(group => {
+			const currentStudents = normalizeObjectIdArray(group.students)
+			if (!currentStudents.some(id => id.toString() === normalizedStudentId)) {
+				currentStudents.push(new mongoose.Types.ObjectId(normalizedStudentId))
+			}
+
+			return {
+				updateOne: {
+					filter: { _id: group._id },
+					update: { $set: { students: currentStudents } },
 				},
-				{
-					$set: {
-						students: {
-							$setUnion: ['$students', [normalizedStudentId]],
-						},
-					},
-				},
-			],
-		)
+			}
+		})
+
+		if (updates.length > 0) {
+			await Group.bulkWrite(updates)
+		}
 	}
 
 	if (groupsToRemove.length > 0) {
-		await Group.updateMany(
-			{ _id: { $in: groupsToRemoveObjectIds } },
-			[
-				{
-					$set: {
-						students: {
-							$cond: [{ $isArray: '$students' }, '$students', []],
-						},
-					},
+		const groups = await Group.find({ _id: { $in: groupsToRemove } }).select('_id students')
+		const updates = groups.map(group => {
+			const currentStudents = normalizeObjectIdArray(group.students)
+			const nextStudents = currentStudents.filter(id => id.toString() !== normalizedStudentId)
+
+			return {
+				updateOne: {
+					filter: { _id: group._id },
+					update: { $set: { students: nextStudents } },
 				},
-				{
-					$set: {
-						students: {
-							$filter: {
-								input: '$students',
-								as: 'studentRef',
-								cond: { $ne: ['$$studentRef', normalizedStudentId] },
-							},
-						},
-					},
-				},
-			],
-		)
+			}
+		})
+
+		if (updates.length > 0) {
+			await Group.bulkWrite(updates)
+		}
 	}
 }
 
@@ -289,16 +298,13 @@ exports.createStudent = async (req, res) => {
 
 		const student = await Student.create(studentPayload)
 		if (groups && groups.length > 0) {
-			try {
-				await syncGroupStudentLinks({
-					studentId: student._id,
-					previousGroupIds: [],
-					nextGroupIds: groups,
-				})
-			} catch (syncError) {
-				await Student.findByIdAndDelete(student._id).catch(() => {})
-				throw syncError
-			}
+			await syncGroupStudentLinks({
+				studentId: student._id,
+				previousGroupIds: [],
+				nextGroupIds: groups,
+			}).catch(syncError => {
+				console.error('Create student group sync failed:', syncError)
+			})
 		}
 
 		return res.status(201).json({
@@ -320,7 +326,7 @@ exports.createStudent = async (req, res) => {
 		}
 
 		console.error('Create student failed:', error)
-		return res.status(500).json({ message: 'Internal server error' })
+		return res.status(500).json({ message: 'Internal server error', error: error.message, stack: error.stack })
 	}
 }
 
@@ -604,6 +610,8 @@ exports.updateStudent = async (req, res) => {
 				studentId,
 				previousGroupIds,
 				nextGroupIds,
+			}).catch(syncError => {
+				console.error('Update student group sync failed:', syncError)
 			})
 		}
 
@@ -657,6 +665,8 @@ exports.deleteStudent = async (req, res) => {
 				studentId,
 				previousGroupIds,
 				nextGroupIds: [],
+			}).catch(syncError => {
+				console.error('Delete student group sync failed:', syncError)
 			})
 		}
 

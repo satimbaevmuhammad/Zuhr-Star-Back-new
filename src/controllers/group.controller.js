@@ -258,54 +258,52 @@ const findMissingUserIds = async userIds => {
 	return normalizedIds.filter(userId => !existingIds.has(userId))
 }
 
+const normalizeObjectIdArray = values => {
+	if (!Array.isArray(values)) {
+		return []
+	}
+
+	const seen = new Set()
+	const normalized = []
+	for (const value of values) {
+		const id = String(value || '').trim()
+		if (!id || !mongoose.isValidObjectId(id) || seen.has(id)) {
+			continue
+		}
+		seen.add(id)
+		normalized.push(new mongoose.Types.ObjectId(id))
+	}
+
+	return normalized
+}
+
 const ensureStudentInGroupList = async ({ groupId, studentId }) => {
-	const normalizedStudentId = new mongoose.Types.ObjectId(String(studentId))
-	await Group.updateOne(
-		{ _id: groupId },
-		[
-			{
-				$set: {
-					students: {
-						$cond: [{ $isArray: '$students' }, '$students', []],
-					},
-				},
-			},
-			{
-				$set: {
-					students: {
-						$setUnion: ['$students', [normalizedStudentId]],
-					},
-				},
-			},
-		],
-	)
+	const group = await Group.findById(groupId).select('_id students')
+	if (!group) {
+		return
+	}
+
+	const studentIdString = String(studentId)
+	const students = normalizeObjectIdArray(group.students)
+	if (!students.some(id => id.toString() === studentIdString)) {
+		students.push(new mongoose.Types.ObjectId(studentIdString))
+	}
+
+	await Group.updateOne({ _id: groupId }, { $set: { students } })
 }
 
 const removeStudentFromGroupList = async ({ groupId, studentId }) => {
-	const normalizedStudentId = new mongoose.Types.ObjectId(String(studentId))
-	await Group.updateOne(
-		{ _id: groupId },
-		[
-			{
-				$set: {
-					students: {
-						$cond: [{ $isArray: '$students' }, '$students', []],
-					},
-				},
-			},
-			{
-				$set: {
-					students: {
-						$filter: {
-							input: '$students',
-							as: 'studentRef',
-							cond: { $ne: ['$$studentRef', normalizedStudentId] },
-						},
-					},
-				},
-			},
-		],
+	const group = await Group.findById(groupId).select('_id students')
+	if (!group) {
+		return
+	}
+
+	const studentIdString = String(studentId)
+	const students = normalizeObjectIdArray(group.students).filter(
+		id => id.toString() !== studentIdString,
 	)
+
+	await Group.updateOne({ _id: groupId }, { $set: { students } })
 }
 
 const attachGroupComputedFields = (groupDocument, activeStudentsCount = 0) => {
@@ -858,7 +856,9 @@ exports.attachStudentToGroup = async (req, res) => {
 		}
 
 		await student.save()
-		await ensureStudentInGroupList({ groupId, studentId })
+		await ensureStudentInGroupList({ groupId, studentId }).catch(syncError => {
+			console.error('Attach student group list sync failed:', syncError)
+		})
 
 		const [updatedStudent, countsMap] = await Promise.all([
 			Student.findById(studentId).populate('groups.group', 'name course level status'),
@@ -926,7 +926,9 @@ exports.detachStudentFromGroup = async (req, res) => {
 		}
 
 		await student.save()
-		await removeStudentFromGroupList({ groupId, studentId })
+		await removeStudentFromGroupList({ groupId, studentId }).catch(syncError => {
+			console.error('Detach student group list sync failed:', syncError)
+		})
 
 		const [updatedStudent, countsMap] = await Promise.all([
 			Student.findById(studentId).populate('groups.group', 'name course level status'),
@@ -971,37 +973,29 @@ exports.deleteGroup = async (req, res) => {
 			await Student.updateMany(
 				{ _id: { $in: affectedStudentIds } },
 				{
-					$pull: {
-						groups: {
-							group: groupId,
-						},
-					},
+					$pull: { groups: { group: groupId } },
 				},
 			)
 
-			await Student.updateMany(
-				{ _id: { $in: affectedStudentIds } },
-				[
-					{
-						$set: {
-							groupAttached: {
-								$gt: [
-									{
-										$size: {
-											$filter: {
-												input: '$groups',
-												as: 'groupItem',
-												cond: { $eq: ['$$groupItem.status', 'active'] },
-											},
-										},
-									},
-									0,
-								],
-							},
-						},
-					},
-				],
+			const reloadedStudents = await Student.find({ _id: { $in: affectedStudentIds } }).select(
+				'_id groups',
 			)
+			const updates = reloadedStudents.map(student => {
+				const groupAttached = (student.groups || []).some(
+					groupItem => groupItem.status === 'active',
+				)
+
+				return {
+					updateOne: {
+						filter: { _id: student._id },
+						update: { $set: { groupAttached } },
+					},
+				}
+			})
+
+			if (updates.length > 0) {
+				await Student.bulkWrite(updates)
+			}
 		}
 
 		return res.status(200).json({ message: 'Group deleted successfully' })

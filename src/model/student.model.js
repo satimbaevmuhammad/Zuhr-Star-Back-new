@@ -109,11 +109,11 @@ const studentSchema = new mongoose.Schema(
 studentSchema.index({ parentPhone: 1 })
 studentSchema.index({ 'groups.group': 1 })
 
-studentSchema.pre('validate', function (next) {
-	this.groupAttached = this.groups.some(groupItem => groupItem.status === 'active')
-	next()
+studentSchema.pre('validate', async function () {
+	this.groupAttached =
+		Array.isArray(this.groups) &&
+		this.groups.some(groupItem => groupItem.status === 'active')
 })
-
 const hideSensitiveFields = (doc, ret) => {
 	delete ret.password
 	delete ret.balanceResetAt

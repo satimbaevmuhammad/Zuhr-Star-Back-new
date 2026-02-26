@@ -6,7 +6,14 @@ const { verifyAccessToken } = require('../utils/token')
 const ROLE_PERMISSIONS = Object.freeze({
 	teacher: ['profile:read', 'students:read', 'groups:read'],
 	supporteacher: ['profile:read', 'students:read', 'groups:read'],
-	headteacher: ['profile:read', 'users:read', 'students:read', 'student:manage', 'groups:read', 'groups:manage'],
+	headteacher: [
+		'profile:read',
+		'users:read',
+		'students:read',
+		'students:manage',
+		'groups:read',
+		'groups:manage',
+	],
 	admin: [
 		'profile:read',
 		'users:read',

@@ -51,7 +51,7 @@ const router = express.Router()
  *                 minLength: 8
  *               role:
  *                 type: string
- *                 enum: [teacher, supporteacher, headteacher, admin, superadmin]
+ *                 enum: [teacher, supporteacher, headteacher, admin]
  *               company:
  *                 type: string
  *               location:

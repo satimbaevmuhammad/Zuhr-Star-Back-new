@@ -65,6 +65,7 @@ const run = async () => {
 	assert.strictEqual(hasPermission('admin', 'users:manage_roles'), true)
 	assert.strictEqual(hasPermission('teacher', 'users:read'), false)
 	assert.strictEqual(hasPermission('admin', 'students:manage'), true)
+	assert.strictEqual(hasPermission('headteacher', 'students:manage'), true)
 	assert.strictEqual(hasPermission('teacher', 'students:manage'), false)
 	assert.strictEqual(hasPermission('teacher', 'students:read'), true)
 	assert.strictEqual(extractBearerToken(`Bearer abc.def.ghi`), 'abc.def.ghi')

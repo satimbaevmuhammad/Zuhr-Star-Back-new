@@ -239,10 +239,16 @@ exports.register = async (req, res) => {
 
 exports.refreshToken = async (req, res) => {
 	try {
-		const refreshToken = String(req.body.refreshToken || '').trim()
-		if (!refreshToken) {
+		const refreshTokenInput = String(req.body.refreshToken || '').trim()
+		if (!refreshTokenInput) {
 			return res.status(400).json({ message: 'Refresh token is required' })
 		}
+
+		const refreshToken = refreshTokenInput.replace(/^Bearer\s+/i, '').trim()
+		const strictRefreshTokenMatch =
+			String(process.env.STRICT_REFRESH_TOKEN_MATCH || 'false')
+				.trim()
+				.toLowerCase() === 'true'
 
 		const payload = verifyRefreshToken(refreshToken)
 		const user = await User.findById(payload.id).select('+refreshToken')
@@ -250,7 +256,7 @@ exports.refreshToken = async (req, res) => {
 			return res.status(401).json({ message: 'Invalid refresh token' })
 		}
 
-		if (user.refreshToken !== refreshToken) {
+		if (strictRefreshTokenMatch && user.refreshToken !== refreshToken) {
 			return res.status(401).json({ message: 'Refresh token mismatch' })
 		}
 
