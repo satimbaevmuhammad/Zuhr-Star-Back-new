@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "node scripts/smoke.test.js"
+    "test": "node scripts/smoke.test.js && node scripts/senior.test.js"
   },
   "keywords": [],
   "author": "",
@@ -19,8 +19,10 @@
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.1.5",
     "multer": "^2.0.2",
-    "nodemon": "^3.1.14",
     "swagger-jsdoc": "^6.2.8",
     "swagger-ui-express": "^5.0.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14"
   }
 }

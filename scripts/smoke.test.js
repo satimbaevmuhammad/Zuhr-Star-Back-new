@@ -14,12 +14,17 @@ const filesToCheck = [
 	'src/routes/auth.routes.js',
 	'src/routes/student.routes.js',
 	'src/routes/group.routes.js',
+	'src/routes/course.routes.js',
 	'src/controllers/auth.controller.js',
 	'src/controllers/student.controller.js',
 	'src/controllers/group.controller.js',
+	'src/controllers/course.controller.js',
 	'src/model/user.model.js',
 	'src/model/student.model.js',
 	'src/model/group.model.js',
+	'src/model/course.model.js',
+	'src/model/lesson.model.js',
+	'src/services/course-sync.service.js',
 	'src/utils/token.js',
 ]
 

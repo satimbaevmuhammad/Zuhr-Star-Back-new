@@ -1,0 +1,746 @@
+const fs = require('fs')
+const mongoose = require('mongoose')
+const path = require('path')
+
+const Course = require('../model/course.model')
+const Group = require('../model/group.model')
+const Lesson = require('../model/lesson.model')
+const { getGroupsCountByCourseIds } = require('../services/course-sync.service')
+
+const LESSON_SELECT =
+	'title order durationMinutes description course documents createdAt updatedAt'
+
+const safeUnlinkIfExists = filePath => {
+	try {
+		if (filePath && fs.existsSync(filePath)) {
+			fs.unlinkSync(filePath)
+		}
+	} catch (error) {
+		console.error('Failed to remove uploaded lesson document file:', error)
+	}
+}
+
+const normalizeCourseResponse = (courseDocument, countMap = new Map()) => {
+	const course = courseDocument.toObject ? courseDocument.toObject() : { ...courseDocument }
+	const courseId = course._id?.toString?.()
+	if (courseId && countMap.has(courseId)) {
+		course.groupsCount = countMap.get(courseId)
+	}
+
+	if (typeof course.groupsCount !== 'number') {
+		course.groupsCount = 0
+	}
+
+	const durationMonths = Number(course.durationMonths) || 0
+	course.maxLessons = durationMonths * 12
+
+	return course
+}
+
+const parseCourseDurationMonths = value => {
+	const durationMonths = Number(value)
+	if (!Number.isInteger(durationMonths) || durationMonths < 1 || durationMonths > 120) {
+		return null
+	}
+
+	return durationMonths
+}
+
+const parseCoursePrice = value => {
+	const price = Number(value)
+	if (!Number.isFinite(price) || price < 0) {
+		return null
+	}
+
+	return price
+}
+
+const parseLessonOrder = value => {
+	if (typeof value === 'undefined') {
+		return undefined
+	}
+
+	const order = Number(value)
+	if (!Number.isInteger(order) || order < 1) {
+		return null
+	}
+
+	return order
+}
+
+const parseLessonDurationMinutes = value => {
+	if (typeof value === 'undefined' || value === null || value === '') {
+		return undefined
+	}
+
+	const durationMinutes = Number(value)
+	if (!Number.isInteger(durationMinutes) || durationMinutes < 1 || durationMinutes > 600) {
+		return null
+	}
+
+	return durationMinutes
+}
+
+const getNextLessonOrder = async courseId => {
+	const latestLesson = await Lesson.findOne({ course: courseId }).sort({ order: -1 }).select('order')
+	if (!latestLesson) {
+		return 1
+	}
+
+	return latestLesson.order + 1
+}
+
+const getCourseWithMethodology = async courseId => {
+	return Course.findById(courseId).populate({
+		path: 'methodology',
+		select: LESSON_SELECT,
+		options: { sort: { order: 1, createdAt: 1 } },
+		populate: {
+			path: 'documents.uploadedBy',
+			select: 'fullname role phone',
+		},
+	})
+}
+
+exports.createCourse = async (req, res) => {
+	try {
+		const name = String(req.body.name || '').trim()
+		const durationMonths = parseCourseDurationMonths(req.body.durationMonths)
+		const price = parseCoursePrice(req.body.price)
+		const note = typeof req.body.note === 'undefined' ? undefined : String(req.body.note || '').trim()
+
+		if (!name || durationMonths === null || price === null) {
+			return res.status(400).json({
+				message: 'name, durationMonths and price are required',
+			})
+		}
+
+		const coursePayload = {
+			name,
+			durationMonths,
+			price,
+		}
+
+		if (typeof note !== 'undefined') {
+			coursePayload.note = note
+		}
+
+		const course = await Course.create(coursePayload)
+		const populatedCourse = await getCourseWithMethodology(course._id)
+		const countMap = new Map([[course._id.toString(), 0]])
+
+		return res.status(201).json({
+			message: 'Course created successfully',
+			course: normalizeCourseResponse(populatedCourse, countMap),
+		})
+	} catch (error) {
+		if (error.code === 11000) {
+			return res.status(409).json({ message: 'Course with this name already exists' })
+		}
+
+		if (error.name === 'ValidationError') {
+			const firstErrorMessage = Object.values(error.errors || {})[0]?.message
+			return res.status(400).json({ message: firstErrorMessage || 'Validation failed' })
+		}
+
+		console.error('Create course failed:', error)
+		return res.status(500).json({ message: 'Internal server error' })
+	}
+}
+
+exports.getCourses = async (req, res) => {
+	try {
+		const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100)
+		const page = Math.max(Number(req.query.page) || 1, 1)
+		const skip = (page - 1) * limit
+		const search = String(req.query.search || '').trim()
+
+		const query = {}
+		if (search) {
+			query.$or = [
+				{ name: { $regex: search, $options: 'i' } },
+				{ note: { $regex: search, $options: 'i' } },
+			]
+		}
+
+		const [courses, total] = await Promise.all([
+			Course.find(query)
+				.sort({ createdAt: -1 })
+				.skip(skip)
+				.limit(limit)
+				.populate({
+					path: 'methodology',
+					select: LESSON_SELECT,
+					options: { sort: { order: 1, createdAt: 1 } },
+				}),
+			Course.countDocuments(query),
+		])
+
+		const countMap = await getGroupsCountByCourseIds(courses.map(course => course._id.toString()))
+		const normalizedCourses = courses.map(course => normalizeCourseResponse(course, countMap))
+
+		return res.status(200).json({
+			page,
+			limit,
+			total,
+			courses: normalizedCourses,
+		})
+	} catch (error) {
+		console.error('Get courses failed:', error)
+		return res.status(500).json({ message: 'Internal server error' })
+	}
+}
+
+exports.getCourseById = async (req, res) => {
+	try {
+		const courseId = req.params.courseId
+		if (!mongoose.isValidObjectId(courseId)) {
+			return res.status(400).json({ message: 'Invalid course id' })
+		}
+
+		const course = await getCourseWithMethodology(courseId)
+		if (!course) {
+			return res.status(404).json({ message: 'Course not found' })
+		}
+
+		const countMap = await getGroupsCountByCourseIds([courseId])
+
+		return res.status(200).json({
+			course: normalizeCourseResponse(course, countMap),
+		})
+	} catch (error) {
+		console.error('Get course by id failed:', error)
+		return res.status(500).json({ message: 'Internal server error' })
+	}
+}
+
+exports.updateCourse = async (req, res) => {
+	try {
+		const courseId = req.params.courseId
+		if (!mongoose.isValidObjectId(courseId)) {
+			return res.status(400).json({ message: 'Invalid course id' })
+		}
+
+		const course = await Course.findById(courseId)
+		if (!course) {
+			return res.status(404).json({ message: 'Course not found' })
+		}
+		const previousName = course.name
+
+		if (typeof req.body.name !== 'undefined') {
+			const name = String(req.body.name || '').trim()
+			if (!name) {
+				return res.status(400).json({ message: 'name cannot be empty' })
+			}
+			course.name = name
+		}
+
+		if (typeof req.body.durationMonths !== 'undefined') {
+			const durationMonths = parseCourseDurationMonths(req.body.durationMonths)
+			if (durationMonths === null) {
+				return res.status(400).json({ message: 'durationMonths must be an integer from 1 to 120' })
+			}
+
+			const lessonsCount = await Lesson.countDocuments({ course: courseId })
+			const maxLessons = durationMonths * 12
+			if (lessonsCount > maxLessons) {
+				return res.status(400).json({
+					message: `durationMonths=${durationMonths} allows maximum ${maxLessons} lessons, but course already has ${lessonsCount} lessons`,
+				})
+			}
+
+			course.durationMonths = durationMonths
+		}
+
+		if (typeof req.body.price !== 'undefined') {
+			const price = parseCoursePrice(req.body.price)
+			if (price === null) {
+				return res.status(400).json({ message: 'price must be a non-negative number' })
+			}
+			course.price = price
+		}
+
+		if (typeof req.body.note !== 'undefined') {
+			course.note = String(req.body.note || '').trim()
+		}
+
+		await course.save()
+
+		if (previousName !== course.name) {
+			await Group.updateMany(
+				{ courseRef: courseId },
+				{ $set: { course: course.name } },
+			)
+		}
+
+		const populatedCourse = await getCourseWithMethodology(courseId)
+		const countMap = await getGroupsCountByCourseIds([courseId])
+
+		return res.status(200).json({
+			message: 'Course updated successfully',
+			course: normalizeCourseResponse(populatedCourse, countMap),
+		})
+	} catch (error) {
+		if (error.code === 11000) {
+			return res.status(409).json({ message: 'Course with this name already exists' })
+		}
+
+		if (error.name === 'ValidationError') {
+			const firstErrorMessage = Object.values(error.errors || {})[0]?.message
+			return res.status(400).json({ message: firstErrorMessage || 'Validation failed' })
+		}
+
+		console.error('Update course failed:', error)
+		return res.status(500).json({ message: 'Internal server error' })
+	}
+}
+
+exports.deleteCourse = async (req, res) => {
+	try {
+		const courseId = req.params.courseId
+		if (!mongoose.isValidObjectId(courseId)) {
+			return res.status(400).json({ message: 'Invalid course id' })
+		}
+
+		const course = await Course.findById(courseId)
+		if (!course) {
+			return res.status(404).json({ message: 'Course not found' })
+		}
+
+		const linkedGroupsCount = await Group.countDocuments({ courseRef: courseId })
+		if (linkedGroupsCount > 0) {
+			return res.status(409).json({
+				message: 'Cannot delete course while groups are attached to it',
+			})
+		}
+
+		const lessons = await Lesson.find({ course: courseId }).select('documents filename')
+		for (const lesson of lessons) {
+			for (const document of lesson.documents || []) {
+				const filename = String(document.filename || '').trim()
+				if (filename) {
+					safeUnlinkIfExists(path.join(process.cwd(), 'uploads', filename))
+				}
+			}
+		}
+
+		await Promise.all([
+			Lesson.deleteMany({ course: courseId }),
+			Course.updateOne({ _id: courseId }, { $set: { methodology: [] } }),
+		])
+
+		await Course.deleteOne({ _id: courseId })
+
+		return res.status(200).json({ message: 'Course deleted successfully' })
+	} catch (error) {
+		console.error('Delete course failed:', error)
+		return res.status(500).json({ message: 'Internal server error' })
+	}
+}
+
+exports.createCourseLesson = async (req, res) => {
+	try {
+		const courseId = req.params.courseId
+		if (!mongoose.isValidObjectId(courseId)) {
+			return res.status(400).json({ message: 'Invalid course id' })
+		}
+
+		const course = await Course.findById(courseId).select('_id durationMonths')
+		if (!course) {
+			return res.status(404).json({ message: 'Course not found' })
+		}
+
+		const maxLessons = Number(course.durationMonths || 0) * 12
+		const currentLessonsCount = await Lesson.countDocuments({ course: courseId })
+		if (currentLessonsCount >= maxLessons) {
+			return res.status(409).json({
+				message: `Course has reached maximum lesson limit (${maxLessons})`,
+			})
+		}
+
+		const title = String(req.body.title || '').trim()
+		if (!title) {
+			return res.status(400).json({ message: 'title is required' })
+		}
+
+		const order = parseLessonOrder(req.body.order)
+		if (order === null) {
+			return res.status(400).json({ message: 'order must be a positive integer' })
+		}
+		if (typeof order !== 'undefined' && order > maxLessons) {
+			return res.status(400).json({
+				message: `order cannot exceed maxLessons (${maxLessons}) for this course`,
+			})
+		}
+
+		const durationMinutes = parseLessonDurationMinutes(req.body.durationMinutes)
+		if (durationMinutes === null) {
+			return res.status(400).json({
+				message: 'durationMinutes must be an integer from 1 to 600',
+			})
+		}
+
+		const nextOrder = typeof order === 'undefined' ? await getNextLessonOrder(courseId) : order
+		if (nextOrder > maxLessons) {
+			return res.status(409).json({
+				message: `Course has reached maximum lesson limit (${maxLessons})`,
+			})
+		}
+
+		const payload = {
+			course: courseId,
+			title,
+			order: nextOrder,
+		}
+
+		if (typeof durationMinutes !== 'undefined') {
+			payload.durationMinutes = durationMinutes
+		}
+
+		if (typeof req.body.description !== 'undefined') {
+			payload.description = String(req.body.description || '').trim()
+		}
+
+		const lesson = await Lesson.create(payload)
+
+		await Promise.all([
+			Course.updateOne({ _id: courseId }, { $addToSet: { methodology: lesson._id } }),
+			Group.updateMany({ courseRef: courseId }, { $addToSet: { lessons: lesson._id } }),
+		])
+
+		return res.status(201).json({
+			message: 'Lesson created and attached to course methodology',
+			lesson,
+		})
+	} catch (error) {
+		if (error.code === 11000) {
+			return res.status(409).json({
+				message: 'Lesson order already exists for this course',
+			})
+		}
+
+		if (error.name === 'ValidationError') {
+			const firstErrorMessage = Object.values(error.errors || {})[0]?.message
+			return res.status(400).json({ message: firstErrorMessage || 'Validation failed' })
+		}
+
+		console.error('Create lesson failed:', error)
+		return res.status(500).json({ message: 'Internal server error' })
+	}
+}
+
+exports.getCourseLessons = async (req, res) => {
+	try {
+		const courseId = req.params.courseId
+		if (!mongoose.isValidObjectId(courseId)) {
+			return res.status(400).json({ message: 'Invalid course id' })
+		}
+
+		const courseExists = await Course.exists({ _id: courseId })
+		if (!courseExists) {
+			return res.status(404).json({ message: 'Course not found' })
+		}
+
+		const lessons = await Lesson.find({ course: courseId })
+			.sort({ order: 1, createdAt: 1 })
+			.populate('documents.uploadedBy', 'fullname role phone')
+		return res.status(200).json({
+			total: lessons.length,
+			lessons,
+		})
+	} catch (error) {
+		console.error('Get lessons failed:', error)
+		return res.status(500).json({ message: 'Internal server error' })
+	}
+}
+
+exports.updateCourseLesson = async (req, res) => {
+	try {
+		const courseId = req.params.courseId
+		const lessonId = req.params.lessonId
+
+		if (!mongoose.isValidObjectId(courseId)) {
+			return res.status(400).json({ message: 'Invalid course id' })
+		}
+
+		if (!mongoose.isValidObjectId(lessonId)) {
+			return res.status(400).json({ message: 'Invalid lesson id' })
+		}
+
+		const lesson = await Lesson.findOne({ _id: lessonId, course: courseId })
+		if (!lesson) {
+			return res.status(404).json({ message: 'Lesson not found in this course' })
+		}
+
+		if (typeof req.body.title !== 'undefined') {
+			const title = String(req.body.title || '').trim()
+			if (!title) {
+				return res.status(400).json({ message: 'title cannot be empty' })
+			}
+			lesson.title = title
+		}
+
+		if (typeof req.body.order !== 'undefined') {
+			const order = parseLessonOrder(req.body.order)
+			if (order === null) {
+				return res.status(400).json({ message: 'order must be a positive integer' })
+			}
+			lesson.order = order
+		}
+
+		if (typeof req.body.durationMinutes !== 'undefined') {
+			const durationMinutes = parseLessonDurationMinutes(req.body.durationMinutes)
+			if (durationMinutes === null) {
+				return res.status(400).json({
+					message: 'durationMinutes must be an integer from 1 to 600',
+				})
+			}
+			lesson.durationMinutes = durationMinutes
+		}
+
+		if (typeof req.body.description !== 'undefined') {
+			lesson.description = String(req.body.description || '').trim()
+		}
+
+		await lesson.save()
+
+		return res.status(200).json({
+			message: 'Lesson updated successfully',
+			lesson,
+		})
+	} catch (error) {
+		if (error.code === 11000) {
+			return res.status(409).json({
+				message: 'Lesson order already exists for this course',
+			})
+		}
+
+		if (error.name === 'ValidationError') {
+			const firstErrorMessage = Object.values(error.errors || {})[0]?.message
+			return res.status(400).json({ message: firstErrorMessage || 'Validation failed' })
+		}
+
+		console.error('Update lesson failed:', error)
+		return res.status(500).json({ message: 'Internal server error' })
+	}
+}
+
+exports.deleteCourseLesson = async (req, res) => {
+	try {
+		const courseId = req.params.courseId
+		const lessonId = req.params.lessonId
+
+		if (!mongoose.isValidObjectId(courseId)) {
+			return res.status(400).json({ message: 'Invalid course id' })
+		}
+
+		if (!mongoose.isValidObjectId(lessonId)) {
+			return res.status(400).json({ message: 'Invalid lesson id' })
+		}
+
+		const lesson = await Lesson.findOneAndDelete({ _id: lessonId, course: courseId })
+		if (!lesson) {
+			return res.status(404).json({ message: 'Lesson not found in this course' })
+		}
+
+		await Promise.all([
+			Course.updateOne({ _id: courseId }, { $pull: { methodology: lesson._id } }),
+			Group.updateMany({ courseRef: courseId }, { $pull: { lessons: lesson._id } }),
+		])
+
+		for (const document of lesson.documents || []) {
+			const filename = String(document.filename || '').trim()
+			if (filename) {
+				safeUnlinkIfExists(path.join(process.cwd(), 'uploads', filename))
+			}
+		}
+
+		return res.status(200).json({ message: 'Lesson deleted successfully' })
+	} catch (error) {
+		console.error('Delete lesson failed:', error)
+		return res.status(500).json({ message: 'Internal server error' })
+	}
+}
+
+exports.getLessonDocuments = async (req, res) => {
+	try {
+		const courseId = req.params.courseId
+		const lessonId = req.params.lessonId
+
+		if (!mongoose.isValidObjectId(courseId)) {
+			return res.status(400).json({ message: 'Invalid course id' })
+		}
+
+		if (!mongoose.isValidObjectId(lessonId)) {
+			return res.status(400).json({ message: 'Invalid lesson id' })
+		}
+
+		const lesson = await Lesson.findOne({ _id: lessonId, course: courseId }).populate(
+			'documents.uploadedBy',
+			'fullname role phone',
+		)
+		if (!lesson) {
+			return res.status(404).json({ message: 'Lesson not found in this course' })
+		}
+
+		return res.status(200).json({
+			courseId,
+			lessonId,
+			total: (lesson.documents || []).length,
+			documents: lesson.documents || [],
+		})
+	} catch (error) {
+		console.error('Get lesson documents failed:', error)
+		return res.status(500).json({ message: 'Internal server error' })
+	}
+}
+
+exports.uploadLessonDocument = async (req, res) => {
+	const uploadedFilePath = req.file?.path
+
+	try {
+		const courseId = req.params.courseId
+		const lessonId = req.params.lessonId
+
+		if (!mongoose.isValidObjectId(courseId)) {
+			safeUnlinkIfExists(uploadedFilePath)
+			return res.status(400).json({ message: 'Invalid course id' })
+		}
+
+		if (!mongoose.isValidObjectId(lessonId)) {
+			safeUnlinkIfExists(uploadedFilePath)
+			return res.status(400).json({ message: 'Invalid lesson id' })
+		}
+
+		if (!req.file) {
+			return res.status(400).json({
+				message: 'document file is required',
+			})
+		}
+
+		const lesson = await Lesson.findOne({ _id: lessonId, course: courseId })
+		if (!lesson) {
+			safeUnlinkIfExists(uploadedFilePath)
+			return res.status(404).json({ message: 'Lesson not found in this course' })
+		}
+
+		const documentPayload = {
+			originalName: String(req.file.originalname || '').trim(),
+			filename: String(req.file.filename || '').trim(),
+			url: `/uploads/${req.file.filename}`,
+			mimeType: String(req.file.mimetype || 'application/octet-stream').trim(),
+			size: Number(req.file.size) || 0,
+			uploadedBy: req.user?._id,
+			uploadedAt: new Date(),
+		}
+
+		lesson.documents.push(documentPayload)
+		await lesson.save()
+
+		const uploadedDocument = lesson.documents[lesson.documents.length - 1]
+
+		return res.status(201).json({
+			message: 'Lesson document uploaded successfully',
+			courseId,
+			lessonId,
+			document: uploadedDocument,
+		})
+	} catch (error) {
+		safeUnlinkIfExists(uploadedFilePath)
+
+		if (error.name === 'ValidationError') {
+			const firstErrorMessage = Object.values(error.errors || {})[0]?.message
+			return res.status(400).json({ message: firstErrorMessage || 'Validation failed' })
+		}
+
+		console.error('Upload lesson document failed:', error)
+		return res.status(500).json({ message: 'Internal server error' })
+	}
+}
+
+exports.deleteLessonDocument = async (req, res) => {
+	try {
+		const courseId = req.params.courseId
+		const lessonId = req.params.lessonId
+		const documentId = req.params.documentId
+
+		if (!mongoose.isValidObjectId(courseId)) {
+			return res.status(400).json({ message: 'Invalid course id' })
+		}
+
+		if (!mongoose.isValidObjectId(lessonId)) {
+			return res.status(400).json({ message: 'Invalid lesson id' })
+		}
+
+		if (!mongoose.isValidObjectId(documentId)) {
+			return res.status(400).json({ message: 'Invalid document id' })
+		}
+
+		const lesson = await Lesson.findOne({ _id: lessonId, course: courseId })
+		if (!lesson) {
+			return res.status(404).json({ message: 'Lesson not found in this course' })
+		}
+
+		const documentIndex = (lesson.documents || []).findIndex(
+			document => document._id.toString() === documentId,
+		)
+		if (documentIndex === -1) {
+			return res.status(404).json({ message: 'Lesson document not found' })
+		}
+
+		const document = lesson.documents[documentIndex]
+		const filename = String(document.filename || '').trim()
+
+		lesson.documents.splice(documentIndex, 1)
+		await lesson.save()
+
+		if (filename) {
+			safeUnlinkIfExists(path.join(process.cwd(), 'uploads', filename))
+		}
+
+		return res.status(200).json({
+			message: 'Lesson document deleted successfully',
+		})
+	} catch (error) {
+		if (error.name === 'ValidationError') {
+			const firstErrorMessage = Object.values(error.errors || {})[0]?.message
+			return res.status(400).json({ message: firstErrorMessage || 'Validation failed' })
+		}
+
+		console.error('Delete lesson document failed:', error)
+		return res.status(500).json({ message: 'Internal server error' })
+	}
+}
+
+exports.rebuildCourseMethodology = async (req, res) => {
+	try {
+		const courseId = req.params.courseId
+		if (!mongoose.isValidObjectId(courseId)) {
+			return res.status(400).json({ message: 'Invalid course id' })
+		}
+
+		const course = await Course.findById(courseId)
+		if (!course) {
+			return res.status(404).json({ message: 'Course not found' })
+		}
+
+		const lessons = await Lesson.find({ course: courseId }).sort({ order: 1, createdAt: 1 }).select('_id')
+		const lessonIds = lessons.map(lesson => lesson._id)
+
+		course.methodology = lessonIds
+		await course.save()
+
+		await Group.updateMany({ courseRef: courseId }, { $set: { lessons: lessonIds } })
+
+		const populatedCourse = await getCourseWithMethodology(courseId)
+		const countMap = await getGroupsCountByCourseIds([courseId])
+
+		return res.status(200).json({
+			message: 'Course methodology rebuilt successfully',
+			course: normalizeCourseResponse(populatedCourse, countMap),
+		})
+	} catch (error) {
+		console.error('Rebuild methodology failed:', error)
+		return res.status(500).json({ message: 'Internal server error' })
+	}
+}

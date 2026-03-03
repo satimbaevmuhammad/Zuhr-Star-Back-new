@@ -24,6 +24,8 @@ const options = {
 			{ name: 'Auth', description: 'Authentication and user role management' },
 			{ name: 'Students', description: 'Student CRUD and listing' },
 			{ name: 'Groups', description: 'Group CRUD, membership, and attendance' },
+			{ name: 'Courses', description: 'Course CRUD and methodology management' },
+			{ name: 'Lessons', description: 'Lessons linked to specific courses' },
 			{ name: 'System', description: 'System endpoints' },
 		],
 		components: {
@@ -69,6 +71,103 @@ const options = {
 						},
 						company: { type: 'string', example: 'OpenAI' },
 						imgURL: { type: 'string', example: '/uploads/avatar.png' },
+						createdAt: { type: 'string', format: 'date-time' },
+						updatedAt: { type: 'string', format: 'date-time' },
+					},
+				},
+				Lesson: {
+					type: 'object',
+					properties: {
+						_id: { type: 'string', example: '65f12ca7a7720c194de6b001' },
+						course: { type: 'string', example: '65f12ca7a7720c194de6a201' },
+						title: { type: 'string', example: 'Lesson 1: Numbers and Counting' },
+						order: { type: 'integer', minimum: 1, example: 1 },
+						durationMinutes: { type: 'integer', minimum: 1, example: 90 },
+						description: { type: 'string', example: 'Introduction to numbers and operations' },
+						documents: {
+							type: 'array',
+							items: { $ref: '#/components/schemas/LessonDocument' },
+						},
+						createdAt: { type: 'string', format: 'date-time' },
+						updatedAt: { type: 'string', format: 'date-time' },
+					},
+				},
+				LessonDocument: {
+					type: 'object',
+					properties: {
+						_id: { type: 'string', example: '65f12ca7a7720c194de6b0f1' },
+						originalName: { type: 'string', example: 'Algebra-Lesson-1.pdf' },
+						filename: { type: 'string', example: '1772600000000-a1b2c3d4.pdf' },
+						url: { type: 'string', example: '/uploads/1772600000000-a1b2c3d4.pdf' },
+						mimeType: { type: 'string', example: 'application/pdf' },
+						size: { type: 'integer', example: 245760 },
+						uploadedBy: {
+							oneOf: [{ type: 'string' }, { $ref: '#/components/schemas/User' }],
+						},
+						uploadedAt: { type: 'string', format: 'date-time' },
+					},
+				},
+				LessonCreateInput: {
+					type: 'object',
+					required: ['title'],
+					properties: {
+						title: { type: 'string', example: 'Lesson 1: Algebra Basics' },
+						order: { type: 'integer', minimum: 1, example: 1 },
+						durationMinutes: { type: 'integer', minimum: 1, example: 90 },
+						description: { type: 'string', example: 'Variables and simple equations' },
+					},
+				},
+				LessonUpdateInput: {
+					type: 'object',
+					properties: {
+						title: { type: 'string', example: 'Lesson 1: Algebra Basics' },
+						order: { type: 'integer', minimum: 1, example: 2 },
+						durationMinutes: { type: 'integer', minimum: 1, example: 100 },
+						description: { type: 'string', example: 'Updated lesson description' },
+					},
+				},
+				CourseCreateInput: {
+					type: 'object',
+					required: ['name', 'durationMonths', 'price'],
+					properties: {
+						name: { type: 'string', example: 'Mathematics' },
+						durationMonths: { type: 'integer', minimum: 1, maximum: 120, example: 6 },
+						price: { type: 'number', minimum: 0, example: 1200000 },
+						note: { type: 'string', example: 'Core mathematics program for beginners' },
+					},
+				},
+				CourseUpdateInput: {
+					type: 'object',
+					properties: {
+						name: { type: 'string', example: 'Advanced Mathematics' },
+						durationMonths: { type: 'integer', minimum: 1, maximum: 120, example: 8 },
+						price: { type: 'number', minimum: 0, example: 1500000 },
+						note: { type: 'string', example: 'Updated program details' },
+					},
+				},
+				Course: {
+					type: 'object',
+					properties: {
+						_id: { type: 'string', example: '65f12ca7a7720c194de6a201' },
+						name: { type: 'string', example: 'English' },
+						durationMonths: { type: 'integer', example: 6 },
+						maxLessons: {
+							type: 'integer',
+							example: 72,
+							description: 'Computed automatically as durationMonths * 12',
+						},
+						price: { type: 'number', example: 900000 },
+						groupsCount: { type: 'integer', example: 3 },
+						methodology: {
+							type: 'array',
+							items: {
+								oneOf: [
+									{ type: 'string' },
+									{ $ref: '#/components/schemas/Lesson' },
+								],
+							},
+						},
+						note: { type: 'string', example: 'English foundation course' },
 						createdAt: { type: 'string', format: 'date-time' },
 						updatedAt: { type: 'string', format: 'date-time' },
 					},
@@ -125,10 +224,22 @@ const options = {
 				},
 				GroupCreateInput: {
 					type: 'object',
-					required: ['name', 'course', 'teacher', 'startDate', 'schedule'],
+					required: ['name', 'groupType', 'teacher', 'startDate', 'schedule'],
 					properties: {
 						name: { type: 'string', example: 'IELTS A1 - Morning' },
 						course: { type: 'string', example: 'IELTS Foundation' },
+						courseId: {
+							type: 'string',
+							example: '65f12ca7a7720c194de6a201',
+							description: 'Optional. If passed, group course name and lessons are auto-linked from course',
+						},
+						groupType: {
+							type: 'string',
+							enum: ['odd', 'even'],
+							example: 'odd',
+							description:
+								'odd => monday/wednesday/friday, even => tuesday/thursday/saturday',
+						},
 						level: { type: 'string', example: 'A1' },
 						teacher: { type: 'string', example: '65f12ca7a7720c194de6a095' },
 						supportTeachers: {
@@ -162,6 +273,8 @@ const options = {
 					properties: {
 						name: { type: 'string' },
 						course: { type: 'string' },
+						courseId: { type: 'string' },
+						groupType: { type: 'string', enum: ['odd', 'even'] },
 						level: { type: 'string' },
 						teacher: { type: 'string' },
 						supportTeachers: {
@@ -190,6 +303,22 @@ const options = {
 						_id: { type: 'string', example: '65f12ca7a7720c194de6a011' },
 						name: { type: 'string', example: 'IELTS A1 - Morning' },
 						course: { type: 'string', example: 'IELTS Foundation' },
+						groupType: { type: 'string', enum: ['odd', 'even'], example: 'odd' },
+						courseRef: {
+							oneOf: [
+								{ type: 'string' },
+								{ $ref: '#/components/schemas/Course' },
+							],
+						},
+						lessons: {
+							type: 'array',
+							items: {
+								oneOf: [
+									{ type: 'string' },
+									{ $ref: '#/components/schemas/Lesson' },
+								],
+							},
+						},
 						level: { type: 'string', example: 'A1' },
 						teacher: {
 							oneOf: [

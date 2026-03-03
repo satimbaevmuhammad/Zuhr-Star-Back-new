@@ -4,7 +4,6 @@ const mongoose = require('mongoose')
 const Group = require('../model/group.model')
 const Student = require('../model/student.model')
 const { resetStudentBalancesIfNeeded } = require('../services/student-balance-reset.service')
-const { stack } = require('../routes/group.routes')
 
 const PHONE_PATTERN = /^\+?[0-9]{7,15}$/
 const STUDENT_GROUP_STATUSES = ['active', 'paused', 'completed', 'left']
@@ -326,7 +325,7 @@ exports.createStudent = async (req, res) => {
 		}
 
 		console.error('Create student failed:', error)
-		return res.status(500).json({ message: 'Internal server error', error: error.message, stack: error.stack })
+		return res.status(500).json({ message: 'Internal server error' })
 	}
 }
 
@@ -353,7 +352,7 @@ exports.getStudents = async (req, res) => {
 				.sort({ createdAt: -1 })
 				.skip(skip)
 				.limit(limit)
-				.populate('groups.group', 'name course level status'),
+				.populate('groups.group', 'name course courseRef lessons groupType level status'),
 			Student.countDocuments(query),
 		])
 
@@ -380,7 +379,7 @@ exports.getStudentById = async (req, res) => {
 
 		const student = await Student.findById(studentId).populate(
 			'groups.group',
-			'name course level status',
+			'name course courseRef lessons groupType level status',
 		)
 		if (!student) {
 			return res.status(404).json({ message: 'Student not found' })
@@ -414,7 +413,7 @@ exports.getStudentGroups = async (req, res) => {
 
 		const student = await Student.findById(studentId).populate(
 			'groups.group',
-			'name course level status teacher supportTeachers maxStudents startDate endDate schedule room monthlyFee',
+			'name course courseRef lessons groupType level status teacher supportTeachers maxStudents startDate endDate schedule room monthlyFee',
 		)
 		if (!student) {
 			return res.status(404).json({ message: 'Student not found' })
@@ -617,7 +616,7 @@ exports.updateStudent = async (req, res) => {
 
 		const updatedStudent = await Student.findById(studentId).populate(
 			'groups.group',
-			'name course level status',
+			'name course courseRef lessons groupType level status',
 		)
 
 		return res.status(200).json({

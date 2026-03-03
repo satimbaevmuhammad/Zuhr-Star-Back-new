@@ -293,13 +293,66 @@ router.delete(
  *         description: Attendance updated
  *       400:
  *         description: Validation failed
+ *       403:
+ *         description: Forbidden for this group
  *       404:
  *         description: Group not found
  */
 router.post(
 	'/:groupId/attendance',
-	allowPermissions('groups:manage'),
+	allowPermissions('groups:read'),
 	groupController.upsertGroupAttendance,
+)
+
+/**
+ * @swagger
+ * /api/groups/{groupId}/attendance/students/{studentId}:
+ *   patch:
+ *     tags: [Groups]
+ *     summary: Live update single student attendance during lesson
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: groupId
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: path
+ *         name: studentId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [date, status]
+ *             properties:
+ *               date:
+ *                 type: string
+ *                 format: date-time
+ *               status:
+ *                 type: string
+ *                 enum: [present, absent, late, excused]
+ *               note:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Attendance updated successfully
+ *       400:
+ *         description: Validation failed
+ *       403:
+ *         description: Forbidden for this group
+ *       404:
+ *         description: Group not found
+ */
+router.patch(
+	'/:groupId/attendance/students/:studentId',
+	allowPermissions('groups:read'),
+	groupController.markGroupAttendanceStudent,
 )
 
 module.exports = router
