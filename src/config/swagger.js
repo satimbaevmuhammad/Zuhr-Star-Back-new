@@ -112,7 +112,6 @@ const options = {
 					required: ['title'],
 					properties: {
 						title: { type: 'string', example: 'Lesson 1: Algebra Basics' },
-						order: { type: 'integer', minimum: 1, example: 1 },
 						durationMinutes: { type: 'integer', minimum: 1, example: 90 },
 						description: { type: 'string', example: 'Variables and simple equations' },
 					},
@@ -121,7 +120,6 @@ const options = {
 					type: 'object',
 					properties: {
 						title: { type: 'string', example: 'Lesson 1: Algebra Basics' },
-						order: { type: 'integer', minimum: 1, example: 2 },
 						durationMinutes: { type: 'integer', minimum: 1, example: 100 },
 						description: { type: 'string', example: 'Updated lesson description' },
 					},

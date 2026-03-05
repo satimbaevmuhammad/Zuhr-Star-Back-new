@@ -584,6 +584,171 @@ const runTests = async () => {
 			)
 		})
 
+		await test('createCourseLesson ignores incoming order and always uses next sequence', async () => {
+			const courseId = '507f1f77bcf86cd799439090'
+			let createdLessonPayload = null
+
+			await withPatchedMethods(
+				[
+					[
+						Course,
+						'findById',
+						() => ({
+							select: async () => ({ _id: courseId, durationMonths: 6 }),
+						}),
+					],
+					[Lesson, 'countDocuments', async () => 0],
+					[Lesson, 'findOne', () => makeQuery({ order: 3 })],
+					[
+						Lesson,
+						'create',
+						async payload => {
+							createdLessonPayload = payload
+							return { _id: new mongoose.Types.ObjectId(), ...payload }
+						},
+					],
+					[Course, 'updateOne', async () => ({ matchedCount: 1, modifiedCount: 1 })],
+					[Group, 'updateMany', async () => ({ matchedCount: 1, modifiedCount: 1 })],
+				],
+				async () => {
+					const res = await callHandler(courseController.createCourseLesson, {
+						params: { courseId },
+						body: { title: 'Auto order lesson', order: 99 },
+					})
+
+					assert.strictEqual(res.statusCode, 201)
+					assert.ok(createdLessonPayload)
+					assert.strictEqual(createdLessonPayload.order, 4)
+				},
+			)
+		})
+
+		await test('updateCourseLesson ignores incoming order changes', async () => {
+			const courseId = '507f1f77bcf86cd799439091'
+			const lessonId = '507f1f77bcf86cd799439092'
+			const lessonDoc = {
+				_id: lessonId,
+				course: courseId,
+				title: 'Before update',
+				order: 1,
+				documents: [],
+				save: async () => {},
+			}
+
+			await withPatchedMethods(
+				[[Lesson, 'findOne', async () => lessonDoc]],
+				async () => {
+					const res = await callHandler(courseController.updateCourseLesson, {
+						params: { courseId, lessonId },
+						body: { title: 'After update', order: 50 },
+					})
+
+					assert.strictEqual(res.statusCode, 200)
+					assert.strictEqual(lessonDoc.title, 'After update')
+					assert.strictEqual(lessonDoc.order, 1)
+				},
+			)
+		})
+
+		await test('createCourseLesson stores uploaded document metadata when file is provided', async () => {
+			const courseId = '507f1f77bcf86cd79943907f'
+			const lessonId = '507f1f77bcf86cd799439080'
+			const uploaderId = '507f1f77bcf86cd799439081'
+			let createdLessonPayload = null
+
+			await withPatchedMethods(
+				[
+					[
+						Course,
+						'findById',
+						() => ({
+							select: async () => ({ _id: courseId, durationMonths: 6 }),
+						}),
+					],
+					[Lesson, 'findOne', () => makeQuery(null)],
+					[Lesson, 'countDocuments', async () => 0],
+					[
+						Lesson,
+						'create',
+						async payload => {
+							createdLessonPayload = payload
+							return {
+								_id: lessonId,
+								...payload,
+							}
+						},
+					],
+					[Course, 'updateOne', async () => ({ matchedCount: 1, modifiedCount: 1 })],
+					[Group, 'updateMany', async () => ({ matchedCount: 1, modifiedCount: 1 })],
+				],
+				async () => {
+					const res = await callHandler(courseController.createCourseLesson, {
+						params: { courseId },
+						body: { title: 'Lesson with File' },
+						user: { _id: uploaderId, role: 'teacher' },
+						file: {
+							originalname: 'lesson-create.pdf',
+							filename: '1772600001111-aabbccdd.pdf',
+							mimetype: 'application/pdf',
+							size: 654321,
+							path: 'uploads/1772600001111-aabbccdd.pdf',
+						},
+					})
+
+					assert.strictEqual(res.statusCode, 201)
+					assert.ok(createdLessonPayload)
+					assert.ok(Array.isArray(createdLessonPayload.documents))
+					assert.strictEqual(createdLessonPayload.documents.length, 1)
+					assert.strictEqual(
+						createdLessonPayload.documents[0].url,
+						'/uploads/1772600001111-aabbccdd.pdf',
+					)
+					assert.strictEqual(String(createdLessonPayload.documents[0].uploadedBy), uploaderId)
+				},
+			)
+		})
+
+		await test('updateCourseLesson appends uploaded document metadata when file is provided', async () => {
+			const courseId = '507f1f77bcf86cd799439082'
+			const lessonId = '507f1f77bcf86cd799439083'
+			const uploaderId = '507f1f77bcf86cd799439084'
+			const lessonDoc = {
+				_id: lessonId,
+				course: courseId,
+				title: 'Lesson to patch',
+				order: 1,
+				documents: [],
+				save: async () => {},
+			}
+
+			await withPatchedMethods(
+				[[Lesson, 'findOne', async () => lessonDoc]],
+				async () => {
+					const res = await callHandler(courseController.updateCourseLesson, {
+						params: { courseId, lessonId },
+						body: {},
+						user: { _id: uploaderId, role: 'teacher' },
+						file: {
+							originalname: 'lesson-update.docx',
+							filename: '1772600002222-eeff0011.docx',
+							mimetype:
+								'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+							size: 222222,
+							path: 'uploads/1772600002222-eeff0011.docx',
+						},
+					})
+
+					assert.strictEqual(res.statusCode, 200)
+					assert.strictEqual(lessonDoc.documents.length, 1)
+					assert.strictEqual(
+						lessonDoc.documents[0].filename,
+						'1772600002222-eeff0011.docx',
+					)
+					assert.strictEqual(String(lessonDoc.documents[0].uploadedBy), uploaderId)
+				},
+			)
+		})
+
 		await test('createCourseLesson rejects when lesson limit is reached', async () => {
 			const courseId = '507f1f77bcf86cd79943907b'
 

@@ -6,6 +6,7 @@ const Course = require('../model/course.model')
 const Group = require('../model/group.model')
 const Lesson = require('../model/lesson.model')
 const { getGroupsCountByCourseIds } = require('../services/course-sync.service')
+const { toPublicUrl } = require('../utils/public-url')
 
 const LESSON_SELECT =
 	'title order durationMinutes description course documents createdAt updatedAt'
@@ -20,7 +21,32 @@ const safeUnlinkIfExists = filePath => {
 	}
 }
 
-const normalizeCourseResponse = (courseDocument, countMap = new Map()) => {
+const buildLessonDocumentPayload = (file, uploadedBy) => ({
+	originalName: String(file?.originalname || '').trim(),
+	filename: String(file?.filename || '').trim(),
+	url: `/uploads/${file?.filename}`,
+	mimeType: String(file?.mimetype || 'application/octet-stream').trim(),
+	size: Number(file?.size) || 0,
+	uploadedBy,
+	uploadedAt: new Date(),
+})
+
+const normalizeLessonDocument = (document, req) => {
+	const normalizedDocument = document?.toObject ? document.toObject() : { ...document }
+	normalizedDocument.url = toPublicUrl(req, normalizedDocument.url)
+	return normalizedDocument
+}
+
+const normalizeLessonResponse = (lessonDocument, req) => {
+	const lesson = lessonDocument?.toObject ? lessonDocument.toObject() : { ...lessonDocument }
+	lesson.documents = Array.isArray(lesson.documents)
+		? lesson.documents.map(document => normalizeLessonDocument(document, req))
+		: []
+
+	return lesson
+}
+
+const normalizeCourseResponse = (courseDocument, countMap = new Map(), req) => {
 	const course = courseDocument.toObject ? courseDocument.toObject() : { ...courseDocument }
 	const courseId = course._id?.toString?.()
 	if (courseId && countMap.has(courseId)) {
@@ -33,6 +59,15 @@ const normalizeCourseResponse = (courseDocument, countMap = new Map()) => {
 
 	const durationMonths = Number(course.durationMonths) || 0
 	course.maxLessons = durationMonths * 12
+
+	if (Array.isArray(course.methodology)) {
+		course.methodology = course.methodology.map(lesson => {
+			if (!lesson || typeof lesson !== 'object') {
+				return lesson
+			}
+			return normalizeLessonResponse(lesson, req)
+		})
+	}
 
 	return course
 }
@@ -53,19 +88,6 @@ const parseCoursePrice = value => {
 	}
 
 	return price
-}
-
-const parseLessonOrder = value => {
-	if (typeof value === 'undefined') {
-		return undefined
-	}
-
-	const order = Number(value)
-	if (!Number.isInteger(order) || order < 1) {
-		return null
-	}
-
-	return order
 }
 
 const parseLessonDurationMinutes = value => {
@@ -131,7 +153,7 @@ exports.createCourse = async (req, res) => {
 
 		return res.status(201).json({
 			message: 'Course created successfully',
-			course: normalizeCourseResponse(populatedCourse, countMap),
+			course: normalizeCourseResponse(populatedCourse, countMap, req),
 		})
 	} catch (error) {
 		if (error.code === 11000) {
@@ -177,7 +199,9 @@ exports.getCourses = async (req, res) => {
 		])
 
 		const countMap = await getGroupsCountByCourseIds(courses.map(course => course._id.toString()))
-		const normalizedCourses = courses.map(course => normalizeCourseResponse(course, countMap))
+		const normalizedCourses = courses.map(course =>
+			normalizeCourseResponse(course, countMap, req),
+		)
 
 		return res.status(200).json({
 			page,
@@ -206,7 +230,7 @@ exports.getCourseById = async (req, res) => {
 		const countMap = await getGroupsCountByCourseIds([courseId])
 
 		return res.status(200).json({
-			course: normalizeCourseResponse(course, countMap),
+			course: normalizeCourseResponse(course, countMap, req),
 		})
 	} catch (error) {
 		console.error('Get course by id failed:', error)
@@ -278,7 +302,7 @@ exports.updateCourse = async (req, res) => {
 
 		return res.status(200).json({
 			message: 'Course updated successfully',
-			course: normalizeCourseResponse(populatedCourse, countMap),
+			course: normalizeCourseResponse(populatedCourse, countMap, req),
 		})
 	} catch (error) {
 		if (error.code === 11000) {
@@ -339,20 +363,25 @@ exports.deleteCourse = async (req, res) => {
 }
 
 exports.createCourseLesson = async (req, res) => {
+	const uploadedFilePath = req.file?.path
+
 	try {
 		const courseId = req.params.courseId
 		if (!mongoose.isValidObjectId(courseId)) {
+			safeUnlinkIfExists(uploadedFilePath)
 			return res.status(400).json({ message: 'Invalid course id' })
 		}
 
 		const course = await Course.findById(courseId).select('_id durationMonths')
 		if (!course) {
+			safeUnlinkIfExists(uploadedFilePath)
 			return res.status(404).json({ message: 'Course not found' })
 		}
 
 		const maxLessons = Number(course.durationMonths || 0) * 12
 		const currentLessonsCount = await Lesson.countDocuments({ course: courseId })
 		if (currentLessonsCount >= maxLessons) {
+			safeUnlinkIfExists(uploadedFilePath)
 			return res.status(409).json({
 				message: `Course has reached maximum lesson limit (${maxLessons})`,
 			})
@@ -360,28 +389,21 @@ exports.createCourseLesson = async (req, res) => {
 
 		const title = String(req.body.title || '').trim()
 		if (!title) {
+			safeUnlinkIfExists(uploadedFilePath)
 			return res.status(400).json({ message: 'title is required' })
-		}
-
-		const order = parseLessonOrder(req.body.order)
-		if (order === null) {
-			return res.status(400).json({ message: 'order must be a positive integer' })
-		}
-		if (typeof order !== 'undefined' && order > maxLessons) {
-			return res.status(400).json({
-				message: `order cannot exceed maxLessons (${maxLessons}) for this course`,
-			})
 		}
 
 		const durationMinutes = parseLessonDurationMinutes(req.body.durationMinutes)
 		if (durationMinutes === null) {
+			safeUnlinkIfExists(uploadedFilePath)
 			return res.status(400).json({
 				message: 'durationMinutes must be an integer from 1 to 600',
 			})
 		}
 
-		const nextOrder = typeof order === 'undefined' ? await getNextLessonOrder(courseId) : order
+		const nextOrder = await getNextLessonOrder(courseId)
 		if (nextOrder > maxLessons) {
+			safeUnlinkIfExists(uploadedFilePath)
 			return res.status(409).json({
 				message: `Course has reached maximum lesson limit (${maxLessons})`,
 			})
@@ -401,6 +423,10 @@ exports.createCourseLesson = async (req, res) => {
 			payload.description = String(req.body.description || '').trim()
 		}
 
+		if (req.file) {
+			payload.documents = [buildLessonDocumentPayload(req.file, req.user?._id)]
+		}
+
 		const lesson = await Lesson.create(payload)
 
 		await Promise.all([
@@ -410,9 +436,11 @@ exports.createCourseLesson = async (req, res) => {
 
 		return res.status(201).json({
 			message: 'Lesson created and attached to course methodology',
-			lesson,
+			lesson: normalizeLessonResponse(lesson, req),
 		})
 	} catch (error) {
+		safeUnlinkIfExists(uploadedFilePath)
+
 		if (error.code === 11000) {
 			return res.status(409).json({
 				message: 'Lesson order already exists for this course',
@@ -446,7 +474,7 @@ exports.getCourseLessons = async (req, res) => {
 			.populate('documents.uploadedBy', 'fullname role phone')
 		return res.status(200).json({
 			total: lessons.length,
-			lessons,
+			lessons: lessons.map(lesson => normalizeLessonResponse(lesson, req)),
 		})
 	} catch (error) {
 		console.error('Get lessons failed:', error)
@@ -455,42 +483,41 @@ exports.getCourseLessons = async (req, res) => {
 }
 
 exports.updateCourseLesson = async (req, res) => {
+	const uploadedFilePath = req.file?.path
+
 	try {
 		const courseId = req.params.courseId
 		const lessonId = req.params.lessonId
 
 		if (!mongoose.isValidObjectId(courseId)) {
+			safeUnlinkIfExists(uploadedFilePath)
 			return res.status(400).json({ message: 'Invalid course id' })
 		}
 
 		if (!mongoose.isValidObjectId(lessonId)) {
+			safeUnlinkIfExists(uploadedFilePath)
 			return res.status(400).json({ message: 'Invalid lesson id' })
 		}
 
 		const lesson = await Lesson.findOne({ _id: lessonId, course: courseId })
 		if (!lesson) {
+			safeUnlinkIfExists(uploadedFilePath)
 			return res.status(404).json({ message: 'Lesson not found in this course' })
 		}
 
 		if (typeof req.body.title !== 'undefined') {
 			const title = String(req.body.title || '').trim()
 			if (!title) {
+				safeUnlinkIfExists(uploadedFilePath)
 				return res.status(400).json({ message: 'title cannot be empty' })
 			}
 			lesson.title = title
 		}
 
-		if (typeof req.body.order !== 'undefined') {
-			const order = parseLessonOrder(req.body.order)
-			if (order === null) {
-				return res.status(400).json({ message: 'order must be a positive integer' })
-			}
-			lesson.order = order
-		}
-
 		if (typeof req.body.durationMinutes !== 'undefined') {
 			const durationMinutes = parseLessonDurationMinutes(req.body.durationMinutes)
 			if (durationMinutes === null) {
+				safeUnlinkIfExists(uploadedFilePath)
 				return res.status(400).json({
 					message: 'durationMinutes must be an integer from 1 to 600',
 				})
@@ -502,13 +529,19 @@ exports.updateCourseLesson = async (req, res) => {
 			lesson.description = String(req.body.description || '').trim()
 		}
 
+		if (req.file) {
+			lesson.documents.push(buildLessonDocumentPayload(req.file, req.user?._id))
+		}
+
 		await lesson.save()
 
 		return res.status(200).json({
 			message: 'Lesson updated successfully',
-			lesson,
+			lesson: normalizeLessonResponse(lesson, req),
 		})
 	} catch (error) {
+		safeUnlinkIfExists(uploadedFilePath)
+
 		if (error.code === 11000) {
 			return res.status(409).json({
 				message: 'Lesson order already exists for this course',
@@ -587,7 +620,7 @@ exports.getLessonDocuments = async (req, res) => {
 			courseId,
 			lessonId,
 			total: (lesson.documents || []).length,
-			documents: lesson.documents || [],
+			documents: (lesson.documents || []).map(document => normalizeLessonDocument(document, req)),
 		})
 	} catch (error) {
 		console.error('Get lesson documents failed:', error)
@@ -624,15 +657,7 @@ exports.uploadLessonDocument = async (req, res) => {
 			return res.status(404).json({ message: 'Lesson not found in this course' })
 		}
 
-		const documentPayload = {
-			originalName: String(req.file.originalname || '').trim(),
-			filename: String(req.file.filename || '').trim(),
-			url: `/uploads/${req.file.filename}`,
-			mimeType: String(req.file.mimetype || 'application/octet-stream').trim(),
-			size: Number(req.file.size) || 0,
-			uploadedBy: req.user?._id,
-			uploadedAt: new Date(),
-		}
+		const documentPayload = buildLessonDocumentPayload(req.file, req.user?._id)
 
 		lesson.documents.push(documentPayload)
 		await lesson.save()
@@ -643,7 +668,7 @@ exports.uploadLessonDocument = async (req, res) => {
 			message: 'Lesson document uploaded successfully',
 			courseId,
 			lessonId,
-			document: uploadedDocument,
+			document: normalizeLessonDocument(uploadedDocument, req),
 		})
 	} catch (error) {
 		safeUnlinkIfExists(uploadedFilePath)
@@ -737,7 +762,7 @@ exports.rebuildCourseMethodology = async (req, res) => {
 
 		return res.status(200).json({
 			message: 'Course methodology rebuilt successfully',
-			course: normalizeCourseResponse(populatedCourse, countMap),
+			course: normalizeCourseResponse(populatedCourse, countMap, req),
 		})
 	} catch (error) {
 		console.error('Rebuild methodology failed:', error)

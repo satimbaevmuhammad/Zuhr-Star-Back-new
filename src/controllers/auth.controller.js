@@ -5,6 +5,7 @@ const {
 	generateRefreshToken,
 	verifyRefreshToken,
 } = require('../utils/token')
+const { toPublicUrl } = require('../utils/public-url')
 
 const ALLOWED_ROLES = new Set([
 	'teacher',
@@ -61,10 +62,11 @@ const parseLocation = location => {
 	}
 }
 
-const sanitizeUser = userDocument => {
-	const user = userDocument.toObject()
+const sanitizeUser = (userDocument, req) => {
+	const user = userDocument?.toObject ? userDocument.toObject() : { ...userDocument }
 	delete user.password
 	delete user.refreshToken
+	user.imgURL = toPublicUrl(req, user.imgURL)
 	return user
 }
 
@@ -96,7 +98,7 @@ exports.login = async (req, res) => {
 		res.status(200).json({
 			accessToken,
 			refreshToken,
-			user: sanitizeUser(user),
+			user: sanitizeUser(user, req),
 		})
 	} catch (error) {
 		console.error('Login failed:', error)
@@ -217,7 +219,7 @@ exports.register = async (req, res) => {
 		res.status(201).json({
 			accessToken,
 			refreshToken,
-			user: userResponse,
+			user: sanitizeUser(userResponse, req),
 		})
 	} catch (error) {
 		if (error.code === 11000) {
@@ -296,7 +298,7 @@ exports.me = async (req, res) => {
 			return res.status(401).json({ message: 'Unauthorized' })
 		}
 
-		return res.status(200).json({ user: sanitizeUser(req.user) })
+		return res.status(200).json({ user: sanitizeUser(req.user, req) })
 	} catch (error) {
 		console.error('Get profile failed:', error)
 		return res.status(500).json({ message: 'Internal server error' })
@@ -312,7 +314,7 @@ exports.listUsers = async (req, res) => {
 
 		return res.status(200).json({
 			count: users.length,
-			users,
+			users: users.map(user => sanitizeUser(user, req)),
 		})
 	} catch (error) {
 		console.error('List users failed:', error)
@@ -375,7 +377,7 @@ exports.updateUserRole = async (req, res) => {
 
 		return res.status(200).json({
 			message: 'User role updated successfully',
-			user,
+			user: sanitizeUser(user, req),
 		})
 	} catch (error) {
 		if (error.name === 'CastError') {

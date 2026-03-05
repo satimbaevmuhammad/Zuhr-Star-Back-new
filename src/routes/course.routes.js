@@ -1,7 +1,7 @@
 const express = require('express')
 
 const courseController = require('../controllers/course.controller')
-const { requireAuth, allowPermissions } = require('../middleware/auth.middleware')
+const { requireAuth, allowPermissions, allowRoles } = require('../middleware/auth.middleware')
 const { uploadLessonDocument } = require('../middleware/upload.middleware')
 
 const router = express.Router()
@@ -174,9 +174,22 @@ router.delete('/:courseId', allowPermissions('groups:manage'), courseController.
  *     requestBody:
  *       required: true
  *       content:
- *         application/json:
+ *         multipart/form-data:
  *           schema:
- *             $ref: '#/components/schemas/LessonCreateInput'
+ *             type: object
+ *             required: [title]
+ *             properties:
+ *               title:
+ *                 type: string
+ *               durationMinutes:
+ *                 type: integer
+ *                 minimum: 1
+ *                 maximum: 600
+ *               description:
+ *                 type: string
+ *               document:
+ *                 type: string
+ *                 format: binary
  *     responses:
  *       201:
  *         description: Lesson created
@@ -196,7 +209,8 @@ router.get(
 )
 router.post(
 	'/:courseId/lessons',
-	allowPermissions('groups:manage'),
+	allowRoles('admin', 'superadmin'),
+	uploadLessonDocument,
 	courseController.createCourseLesson,
 )
 
@@ -225,6 +239,21 @@ router.post(
  *         application/json:
  *           schema:
  *             $ref: '#/components/schemas/LessonUpdateInput'
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               title:
+ *                 type: string
+ *               durationMinutes:
+ *                 type: integer
+ *                 minimum: 1
+ *                 maximum: 600
+ *               description:
+ *                 type: string
+ *               document:
+ *                 type: string
+ *                 format: binary
  *     responses:
  *       200:
  *         description: Lesson updated
@@ -264,12 +293,13 @@ router.post(
  */
 router.patch(
 	'/:courseId/lessons/:lessonId',
-	allowPermissions('groups:manage'),
+	allowRoles('admin', 'superadmin'),
+	uploadLessonDocument,
 	courseController.updateCourseLesson,
 )
 router.delete(
 	'/:courseId/lessons/:lessonId',
-	allowPermissions('groups:manage'),
+	allowRoles('admin', 'superadmin'),
 	courseController.deleteCourseLesson,
 )
 
@@ -299,53 +329,11 @@ router.delete(
  *         description: Invalid id
  *       404:
  *         description: Lesson not found
- *   post:
- *     tags: [Lessons]
- *     summary: Upload lesson document (pdf, pptx, docx, and other docs)
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: courseId
- *         required: true
- *         schema:
- *           type: string
- *       - in: path
- *         name: lessonId
- *         required: true
- *         schema:
- *           type: string
- *     requestBody:
- *       required: true
- *       content:
- *         multipart/form-data:
- *           schema:
- *             type: object
- *             required: [document]
- *             properties:
- *               document:
- *                 type: string
- *                 format: binary
- *     responses:
- *       201:
- *         description: Lesson document uploaded
- *       400:
- *         description: Validation failed
- *       403:
- *         description: Forbidden
- *       404:
- *         description: Lesson not found
  */
 router.get(
 	'/:courseId/lessons/:lessonId/documents',
 	allowPermissions('groups:read'),
 	courseController.getLessonDocuments,
-)
-router.post(
-	'/:courseId/lessons/:lessonId/documents',
-	allowPermissions('groups:manage'),
-	uploadLessonDocument,
-	courseController.uploadLessonDocument,
 )
 
 /**
@@ -384,7 +372,7 @@ router.post(
  */
 router.delete(
 	'/:courseId/lessons/:lessonId/documents/:documentId',
-	allowPermissions('groups:manage'),
+	allowRoles('admin', 'superadmin'),
 	courseController.deleteLessonDocument,
 )
 
