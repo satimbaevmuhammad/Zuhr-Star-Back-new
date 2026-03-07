@@ -209,7 +209,7 @@ router.get(
 )
 router.post(
 	'/:courseId/lessons',
-	allowRoles('admin', 'superadmin'),
+	allowRoles('admin', 'headteacher', 'superadmin'),
 	uploadLessonDocument,
 	courseController.createCourseLesson,
 )
@@ -293,13 +293,13 @@ router.post(
  */
 router.patch(
 	'/:courseId/lessons/:lessonId',
-	allowRoles('admin', 'superadmin'),
+	allowRoles('admin', 'superadmin', 'headteacher'),
 	uploadLessonDocument,
 	courseController.updateCourseLesson,
 )
 router.delete(
 	'/:courseId/lessons/:lessonId',
-	allowRoles('admin', 'superadmin'),
+	allowRoles('admin', 'superadmin', 'headteacher'),
 	courseController.deleteCourseLesson,
 )
 
@@ -372,7 +372,7 @@ router.get(
  */
 router.delete(
 	'/:courseId/lessons/:lessonId/documents/:documentId',
-	allowRoles('admin', 'superadmin'),
+	allowRoles('admin', 'superadmin', 'headteacher'),
 	courseController.deleteLessonDocument,
 )
 

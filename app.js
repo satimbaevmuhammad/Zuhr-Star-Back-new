@@ -56,6 +56,11 @@ app.use(
 	},
 	express.static(path.join(process.cwd(), 'uploads')),
 )
+app.use('/public', express.static(path.join(process.cwd(), 'public')))
+
+app.get('/face-id-demo', (req, res) => {
+	res.sendFile(path.join(process.cwd(), 'public', 'face-id-demo.html'))
+})
 
 app.get('/health', (req, res) => {
 	res.status(200).json({ status: 'ok' })

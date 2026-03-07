@@ -235,6 +235,96 @@ const runTests = async () => {
 			)
 		})
 
+		await test('registerFaceId stores descriptor for current user', async () => {
+			const userId = '507f1f77bcf86cd799439014'
+			const descriptor = Array.from({ length: 128 }, (_, index) => Number((index / 1000).toFixed(6)))
+			const userDoc = {
+				_id: userId,
+				role: 'teacher',
+				imgURL: '/uploads/default-avatar.png',
+				faceDescriptor: undefined,
+				faceIdEnabled: false,
+				save: async () => {},
+				toObject() {
+					return {
+						_id: this._id,
+						role: this.role,
+						imgURL: this.imgURL,
+						faceDescriptor: this.faceDescriptor,
+						faceIdEnabled: this.faceIdEnabled,
+					}
+				},
+			}
+
+			await withPatchedMethods(
+				[
+					[
+						User,
+						'findById',
+						() => ({
+							select: async () => userDoc,
+						}),
+					],
+				],
+				async () => {
+					const res = await callHandler(authController.registerFaceId, {
+						user: { _id: userId, role: 'teacher' },
+						body: { descriptor },
+					})
+
+					assert.strictEqual(res.statusCode, 200)
+					assert.strictEqual(userDoc.faceIdEnabled, true)
+					assert.strictEqual(userDoc.faceDescriptor.length, 128)
+				},
+			)
+		})
+
+		await test('loginWithFaceId returns tokens when best match is within threshold', async () => {
+			const userId = '507f1f77bcf86cd799439015'
+			const baseDescriptor = Array.from({ length: 128 }, (_, index) =>
+				Number((0.05 + index / 5000).toFixed(6)),
+			)
+			const loginDescriptor = baseDescriptor.map((value, index) =>
+				Number((value + (index % 2 === 0 ? 0.001 : -0.001)).toFixed(6)),
+			)
+			const userDoc = {
+				_id: userId,
+				role: 'teacher',
+				imgURL: '/uploads/default-avatar.png',
+				faceDescriptor: baseDescriptor,
+				faceIdEnabled: true,
+				refreshToken: null,
+				save: async () => {},
+				toObject() {
+					return {
+						_id: this._id,
+						role: this.role,
+						imgURL: this.imgURL,
+						faceIdEnabled: this.faceIdEnabled,
+					}
+				},
+			}
+
+			await withPatchedMethods(
+				[[User, 'find', () => makeQuery([userDoc])]],
+				async () => {
+					const res = await callHandler(authController.loginWithFaceId, {
+						body: { descriptor: loginDescriptor, threshold: 0.3 },
+						headers: { host: 'localhost:3000' },
+						protocol: 'http',
+						get(headerName) {
+							return this.headers[String(headerName || '').toLowerCase()]
+						},
+					})
+
+					assert.strictEqual(res.statusCode, 200)
+					assert.ok(typeof res.body.accessToken === 'string')
+					assert.ok(typeof res.body.refreshToken === 'string')
+					assert.strictEqual(res.body.user.faceIdEnabled, true)
+				},
+			)
+		})
+
 		await test('createStudent rejects invalid groups payload shape', async () => {
 			const res = await callHandler(studentController.createStudent, {
 				body: {

@@ -87,6 +87,29 @@ const userSchema = new mongoose.Schema(
 			type: locationSchema,
 			default: undefined,
 		},
+		faceDescriptor: {
+			type: [Number],
+			default: undefined,
+			select: false,
+			validate: {
+				validator: value => {
+					if (typeof value === 'undefined') {
+						return true
+					}
+
+					if (!Array.isArray(value) || value.length !== 128) {
+						return false
+					}
+
+					return value.every(number => Number.isFinite(number))
+				},
+				message: 'faceDescriptor must contain exactly 128 numeric values',
+			},
+		},
+		faceIdEnabled: {
+			type: Boolean,
+			default: false,
+		},
 		imgURL: {
 			type: String,
 			default: '/uploads/default-avatar.png',
@@ -100,6 +123,7 @@ userSchema.index({ location: '2dsphere' }, { sparse: true })
 const hideSensitiveFields = (doc, ret) => {
 	delete ret.password
 	delete ret.refreshToken
+	delete ret.faceDescriptor
 	return ret
 }
 

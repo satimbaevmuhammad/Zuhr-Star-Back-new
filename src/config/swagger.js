@@ -71,6 +71,7 @@ const options = {
 						},
 						company: { type: 'string', example: 'OpenAI' },
 						imgURL: { type: 'string', example: '/uploads/avatar.png' },
+						faceIdEnabled: { type: 'boolean', example: false },
 						createdAt: { type: 'string', format: 'date-time' },
 						updatedAt: { type: 'string', format: 'date-time' },
 					},

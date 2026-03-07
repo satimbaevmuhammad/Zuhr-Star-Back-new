@@ -106,6 +106,91 @@ router.post('/login', authController.login)
 
 /**
  * @swagger
+ * /api/auth/login/face:
+ *   post:
+ *     tags: [Auth]
+ *     summary: Login using Face ID descriptor
+ *     description: Swagger UI cannot open webcam and generate descriptor automatically. Use /face-id-demo for camera-based testing.
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [descriptor]
+ *             properties:
+ *               descriptor:
+ *                 type: array
+ *                 minItems: 128
+ *                 maxItems: 128
+ *                 items:
+ *                   type: number
+ *               threshold:
+ *                 type: number
+ *                 description: Optional override for match threshold. Lower means stricter.
+ *                 example: 0.45
+ *     responses:
+ *       200:
+ *         description: Logged in by face
+ *       400:
+ *         description: Validation failed
+ *       401:
+ *         description: Face not recognized
+ */
+router.post('/login/face', authController.loginWithFaceId)
+
+/**
+ * @swagger
+ * /api/auth/face/register:
+ *   post:
+ *     tags: [Auth]
+ *     summary: Register or update current user's Face ID descriptor
+ *     description: Swagger UI cannot open webcam and generate descriptor automatically. Use /face-id-demo for camera-based testing.
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [descriptor]
+ *             properties:
+ *               descriptor:
+ *                 type: array
+ *                 minItems: 128
+ *                 maxItems: 128
+ *                 items:
+ *                   type: number
+ *     responses:
+ *       200:
+ *         description: Face ID registered
+ *       400:
+ *         description: Validation failed
+ *       401:
+ *         description: Unauthorized
+ */
+router.post('/face/register', requireAuth, authController.registerFaceId)
+
+/**
+ * @swagger
+ * /api/auth/face:
+ *   delete:
+ *     tags: [Auth]
+ *     summary: Remove current user's Face ID descriptor
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Face ID removed
+ *       401:
+ *         description: Unauthorized
+ */
+router.delete('/face', requireAuth, authController.removeFaceId)
+
+/**
+ * @swagger
  * /api/auth/refresh-token:
  *   post:
  *     tags: [Auth]

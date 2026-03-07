@@ -23,6 +23,59 @@ const SUPERADMIN_REGISTERABLE_ROLES = new Set([
 	'admin',
 ])
 const ADMIN_MANAGEABLE_ROLES = new Set(['teacher', 'supporteacher', 'headteacher'])
+const FACE_DESCRIPTOR_LENGTH = 128
+
+const parseFaceDescriptor = value => {
+	if (typeof value === 'undefined' || value === null) {
+		return null
+	}
+
+	let parsedValue = value
+	if (typeof value === 'string') {
+		try {
+			parsedValue = JSON.parse(value)
+		} catch (error) {
+			return null
+		}
+	}
+
+	if (!Array.isArray(parsedValue) || parsedValue.length !== FACE_DESCRIPTOR_LENGTH) {
+		return null
+	}
+
+	const descriptor = parsedValue.map(number => Number(number))
+	if (!descriptor.every(number => Number.isFinite(number))) {
+		return null
+	}
+
+	return descriptor
+}
+
+const parseFaceMatchThreshold = value => {
+	if (typeof value === 'undefined' || value === null || value === '') {
+		const envThreshold = Number(process.env.FACE_MATCH_THRESHOLD)
+		if (Number.isFinite(envThreshold) && envThreshold > 0 && envThreshold <= 2) {
+			return envThreshold
+		}
+		return 0.45
+	}
+
+	const threshold = Number(value)
+	if (!Number.isFinite(threshold) || threshold <= 0 || threshold > 2) {
+		return null
+	}
+
+	return threshold
+}
+
+const euclideanDistance = (first, second) => {
+	let sum = 0
+	for (let index = 0; index < first.length; index += 1) {
+		const delta = first[index] - second[index]
+		sum += delta * delta
+	}
+	return Math.sqrt(sum)
+}
 
 const parseLocation = location => {
 	if (!location) {
@@ -66,7 +119,9 @@ const sanitizeUser = (userDocument, req) => {
 	const user = userDocument?.toObject ? userDocument.toObject() : { ...userDocument }
 	delete user.password
 	delete user.refreshToken
+	delete user.faceDescriptor
 	user.imgURL = toPublicUrl(req, user.imgURL)
+	user.faceIdEnabled = Boolean(user.faceIdEnabled)
 	return user
 }
 
@@ -103,6 +158,128 @@ exports.login = async (req, res) => {
 	} catch (error) {
 		console.error('Login failed:', error)
 		res.status(500).json({ message: 'Internal server error' })
+	}
+}
+
+exports.registerFaceId = async (req, res) => {
+	try {
+		if (!req.user) {
+			return res.status(401).json({ message: 'Unauthorized' })
+		}
+
+		const descriptor = parseFaceDescriptor(req.body.descriptor)
+		if (!descriptor) {
+			return res.status(400).json({
+				message: `descriptor must be an array with exactly ${FACE_DESCRIPTOR_LENGTH} numeric values`,
+			})
+		}
+
+		const user = await User.findById(req.user._id).select('+faceDescriptor +refreshToken')
+		if (!user) {
+			return res.status(404).json({ message: 'User not found' })
+		}
+
+		user.faceDescriptor = descriptor
+		user.faceIdEnabled = true
+		await user.save()
+
+		return res.status(200).json({
+			message: 'Face ID registered successfully',
+			user: sanitizeUser(user, req),
+		})
+	} catch (error) {
+		if (error.name === 'ValidationError') {
+			const firstErrorMessage = Object.values(error.errors || {})[0]?.message
+			return res.status(400).json({ message: firstErrorMessage || 'Validation failed' })
+		}
+
+		console.error('Register Face ID failed:', error)
+		return res.status(500).json({ message: 'Internal server error' })
+	}
+}
+
+exports.loginWithFaceId = async (req, res) => {
+	try {
+		const descriptor = parseFaceDescriptor(req.body.descriptor)
+		if (!descriptor) {
+			return res.status(400).json({
+				message: `descriptor must be an array with exactly ${FACE_DESCRIPTOR_LENGTH} numeric values`,
+			})
+		}
+
+		const threshold = parseFaceMatchThreshold(req.body.threshold)
+		if (threshold === null) {
+			return res.status(400).json({
+				message: 'threshold must be a number greater than 0 and less than or equal to 2',
+			})
+		}
+
+		const envMaxCandidates = Number(process.env.FACE_LOGIN_MAX_CANDIDATES)
+		const maxCandidates =
+			Number.isInteger(envMaxCandidates) && envMaxCandidates > 0
+				? Math.min(envMaxCandidates, 10000)
+				: 2000
+
+		const users = await User.find({ faceIdEnabled: true })
+			.select('+faceDescriptor +refreshToken')
+			.limit(maxCandidates)
+
+		let bestMatch = null
+		for (const user of users) {
+			if (!Array.isArray(user.faceDescriptor) || user.faceDescriptor.length !== FACE_DESCRIPTOR_LENGTH) {
+				continue
+			}
+
+			const distance = euclideanDistance(descriptor, user.faceDescriptor)
+			if (!bestMatch || distance < bestMatch.distance) {
+				bestMatch = { user, distance }
+			}
+		}
+
+		if (!bestMatch || bestMatch.distance > threshold) {
+			return res.status(401).json({ message: 'Face ID not recognized' })
+		}
+
+		const accessToken = generateAccessToken(bestMatch.user)
+		const refreshToken = generateRefreshToken(bestMatch.user)
+
+		bestMatch.user.refreshToken = refreshToken
+		await bestMatch.user.save({ validateBeforeSave: false })
+
+		return res.status(200).json({
+			accessToken,
+			refreshToken,
+			matchDistance: Number(bestMatch.distance.toFixed(6)),
+			user: sanitizeUser(bestMatch.user, req),
+		})
+	} catch (error) {
+		console.error('Face ID login failed:', error)
+		return res.status(500).json({ message: 'Internal server error' })
+	}
+}
+
+exports.removeFaceId = async (req, res) => {
+	try {
+		if (!req.user) {
+			return res.status(401).json({ message: 'Unauthorized' })
+		}
+
+		const user = await User.findById(req.user._id).select('+faceDescriptor +refreshToken')
+		if (!user) {
+			return res.status(404).json({ message: 'User not found' })
+		}
+
+		user.faceDescriptor = undefined
+		user.faceIdEnabled = false
+		await user.save({ validateBeforeSave: false })
+
+		return res.status(200).json({
+			message: 'Face ID removed successfully',
+			user: sanitizeUser(user, req),
+		})
+	} catch (error) {
+		console.error('Remove Face ID failed:', error)
+		return res.status(500).json({ message: 'Internal server error' })
 	}
 }
 
