@@ -5,6 +5,33 @@ const { requireAuth, allowPermissions } = require('../middleware/auth.middleware
 
 const router = express.Router()
 
+/**
+ * @swagger
+ * /api/students/login:
+ *   post:
+ *     tags: [Students]
+ *     summary: Student login
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [studentPhone, password]
+ *             properties:
+ *               studentPhone:
+ *                 type: string
+ *               password:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Logged in
+ *       401:
+ *         description: Invalid credentials
+ */
+router.post('/login', studentController.loginStudent)
+
 router.use(requireAuth)
 
 /**

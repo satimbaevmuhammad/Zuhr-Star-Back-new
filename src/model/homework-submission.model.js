@@ -1,6 +1,6 @@
 const mongoose = require('mongoose')
 
-const lessonDocumentSchema = new mongoose.Schema(
+const submissionDocumentSchema = new mongoose.Schema(
 	{
 		originalName: {
 			type: String,
@@ -31,10 +31,6 @@ const lessonDocumentSchema = new mongoose.Schema(
 			required: true,
 			min: 1,
 		},
-		uploadedBy: {
-			type: mongoose.Schema.Types.ObjectId,
-			ref: 'User',
-		},
 		uploadedAt: {
 			type: Date,
 			default: Date.now,
@@ -43,46 +39,31 @@ const lessonDocumentSchema = new mongoose.Schema(
 	{ _id: true },
 )
 
-const lessonSchema = new mongoose.Schema(
+const homeworkSubmissionSchema = new mongoose.Schema(
 	{
-		course: {
+		lesson: {
 			type: mongoose.Schema.Types.ObjectId,
-			ref: 'Course',
+			ref: 'Lesson',
 			required: true,
 			index: true,
 		},
-		title: {
-			type: String,
+		student: {
+			type: mongoose.Schema.Types.ObjectId,
+			ref: 'Student',
 			required: true,
-			trim: true,
-			minlength: 1,
-			maxlength: 150,
+			index: true,
 		},
-		order: {
-			type: Number,
+		group: {
+			type: mongoose.Schema.Types.ObjectId,
+			ref: 'Group',
 			required: true,
-			min: 1,
-		},
-		durationMinutes: {
-			type: Number,
-			min: 1,
-			max: 600,
 		},
 		description: {
 			type: String,
 			trim: true,
-			maxlength: 1000,
+			maxlength: 2000,
 		},
-		documents: {
-			type: [lessonDocumentSchema],
-			default: [],
-		},
-		homework: {
-			type: String,
-			trim: true,
-			maxlength: 1000,
-		},
-		homeworkLinks: {
+		links: {
 			type: [String],
 			default: [],
 			validate: {
@@ -105,18 +86,44 @@ const lessonSchema = new mongoose.Schema(
 
 					return new Set(normalized).size === normalized.length
 				},
-				message: 'homeworkLinks must be unique non-empty strings up to 500 characters',
+				message: 'links must be unique non-empty strings up to 500 characters',
 			},
 		},
-		homeworkDocuments: {
-			type: [lessonDocumentSchema],
+		documents: {
+			type: [submissionDocumentSchema],
 			default: [],
+		},
+		status: {
+			type: String,
+			enum: ['submitted', 'approved'],
+			default: 'submitted',
+		},
+		score: {
+			type: Number,
+			min: 0,
+			max: 100,
+			default: null,
+		},
+		attemptsCount: {
+			type: Number,
+			default: 1,
+			min: 1,
+		},
+		submittedAt: {
+			type: Date,
+			default: Date.now,
+		},
+		checkedBy: {
+			type: mongoose.Schema.Types.ObjectId,
+			ref: 'User',
+		},
+		checkedAt: {
+			type: Date,
 		},
 	},
 	{ timestamps: true },
 )
 
-lessonSchema.index({ course: 1, order: 1 }, { unique: true })
-lessonSchema.index({ course: 1, title: 1 })
+homeworkSubmissionSchema.index({ lesson: 1, student: 1 }, { unique: true })
 
-module.exports = mongoose.model('Lesson', lessonSchema)
+module.exports = mongoose.model('HomeworkSubmission', homeworkSubmissionSchema)

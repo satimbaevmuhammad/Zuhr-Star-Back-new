@@ -4,9 +4,45 @@ const mongoose = require('mongoose')
 const Group = require('../model/group.model')
 const Student = require('../model/student.model')
 const { resetStudentBalancesIfNeeded } = require('../services/student-balance-reset.service')
+const { generateStudentAccessToken } = require('../utils/token')
 
 const PHONE_PATTERN = /^\+?[0-9]{7,15}$/
 const STUDENT_GROUP_STATUSES = ['active', 'paused', 'completed', 'left']
+
+const sanitizeStudent = studentDocument => {
+	return studentDocument?.toObject ? studentDocument.toObject() : { ...studentDocument }
+}
+
+exports.loginStudent = async (req, res) => {
+	try {
+		const studentPhone = String(req.body.studentPhone || '').trim()
+		const password = req.body.password
+
+		if (!studentPhone || !password) {
+			return res.status(400).json({ message: 'studentPhone and password required' })
+		}
+
+		const student = await Student.findOne({ studentPhone }).select('+password')
+		if (!student) {
+			return res.status(401).json({ message: 'Invalid credentials' })
+		}
+
+		const isMatch = await bcrypt.compare(password, student.password)
+		if (!isMatch) {
+			return res.status(401).json({ message: 'Invalid credentials' })
+		}
+
+		const accessToken = generateStudentAccessToken(student)
+
+		return res.status(200).json({
+			accessToken,
+			student: sanitizeStudent(student),
+		})
+	} catch (error) {
+		console.error('Student login failed:', error)
+		return res.status(500).json({ message: 'Internal server error' })
+	}
+}
 
 const parseGroupIds = input => {
 	if (typeof input === 'undefined') {

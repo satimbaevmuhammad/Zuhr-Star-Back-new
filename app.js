@@ -7,6 +7,7 @@ const authRoutes = require('./src/routes/auth.routes')
 const studentRoutes = require('./src/routes/student.routes')
 const groupRoutes = require('./src/routes/group.routes')
 const courseRoutes = require('./src/routes/course.routes')
+const homeworkRoutes = require('./src/routes/homework.routes')
 const swaggerSpec = require('./src/config/swagger')
 
 const app = express()
@@ -76,6 +77,7 @@ app.use('/api/auth', authRoutes)
 app.use('/api/students', studentRoutes)
 app.use('/api/groups', groupRoutes)
 app.use('/api/courses', courseRoutes)
+app.use('/api/homework', homeworkRoutes)
 
 app.use((req, res) => {
 	res.status(404).json({ message: 'Route not found' })

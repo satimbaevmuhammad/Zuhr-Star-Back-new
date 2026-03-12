@@ -1,4 +1,7 @@
+const fs = require('fs')
+const mongoose = require('mongoose')
 const User = require('../model/user.model')
+const Group = require('../model/group.model')
 const bcrypt = require('bcrypt')
 const {
 	generateAccessToken,
@@ -112,6 +115,20 @@ const parseLocation = location => {
 	return {
 		type: 'Point',
 		coordinates: [longitude, latitude],
+	}
+}
+
+const removeUploadedFileIfAny = req => {
+	if (!req?.file?.path) {
+		return
+	}
+
+	try {
+		if (fs.existsSync(req.file.path)) {
+			fs.unlinkSync(req.file.path)
+		}
+	} catch (error) {
+		console.error('Failed to remove uploaded avatar after auth rejection:', error)
 	}
 }
 
@@ -285,6 +302,12 @@ exports.removeFaceId = async (req, res) => {
 
 
 exports.register = async (req, res) => {
+	let createdUserId = null
+	const fail = (statusCode, message) => {
+		removeUploadedFileIfAny(req)
+		return res.status(statusCode).json({ message })
+	}
+
 	try {
 		const fullname = String(req.body.fullname || '').trim()
 		const phone = String(req.body.phone || '').trim()
@@ -301,35 +324,41 @@ exports.register = async (req, res) => {
 			.toLowerCase()
 		const company = req.body.company ? String(req.body.company).trim() : undefined
 		const parsedLocation = parseLocation(req.body.location)
+		const faceDescriptorInput =
+			typeof req.body.faceDescriptor !== 'undefined'
+				? req.body.faceDescriptor
+				: req.body.descriptor
+		const faceDescriptor =
+			typeof faceDescriptorInput === 'undefined'
+				? null
+				: parseFaceDescriptor(faceDescriptorInput)
 
 		if (!fullname || !phone || !email || !dateOfBirth || !gender || !password) {
-			return res.status(400).json({ message: 'Required fields missing' })
+			return fail(400, 'Required fields missing')
 		}
 
 		if (!PHONE_PATTERN.test(phone)) {
-			return res.status(400).json({ message: 'Invalid phone format' })
+			return fail(400, 'Invalid phone format')
 		}
 
 		if (!['male', 'female'].includes(gender)) {
-			return res.status(400).json({ message: 'Gender must be male or female' })
+			return fail(400, 'Gender must be male or female')
 		}
 
 		if (password.length < 8) {
-			return res.status(400).json({ message: 'Password must be at least 8 characters' })
+			return fail(400, 'Password must be at least 8 characters')
 		}
 
 		if (!ALLOWED_ROLES.has(requestedRole)) {
-			return res.status(400).json({ message: 'Invalid role provided' })
+			return fail(400, 'Invalid role provided')
 		}
 
 		if (requestedRole === 'superadmin') {
-			return res
-				.status(403)
-				.json({ message: 'Superadmin cannot be created from register endpoint' })
+			return fail(403, 'Superadmin cannot be created from register endpoint')
 		}
 
 		if (!req.user) {
-			return res.status(401).json({ message: 'Authorization token missing' })
+			return fail(401, 'Authorization token missing')
 		}
 
 		const creatorRole = req.user.role
@@ -337,21 +366,26 @@ exports.register = async (req, res) => {
 			creatorRole === 'superadmin' && SUPERADMIN_REGISTERABLE_ROLES.has(requestedRole)
 
 		if (!canCreateRequestedRole) {
-			return res.status(403).json({
-				message: 'Forbidden: only superadmin can register employees',
-			})
+			return fail(403, 'Forbidden: only superadmin can register employees')
 		}
 
 		if (req.body.location && !parsedLocation) {
-			return res.status(400).json({
-				message:
-					'Invalid location. Expected JSON object with coordinates [longitude, latitude]',
-			})
+			return fail(
+				400,
+				'Invalid location. Expected JSON object with coordinates [longitude, latitude]',
+			)
+		}
+
+		if (typeof faceDescriptorInput !== 'undefined' && !faceDescriptor) {
+			return fail(
+				400,
+				`descriptor must be an array with exactly ${FACE_DESCRIPTOR_LENGTH} numeric values`,
+			)
 		}
 
 		const parsedDate = new Date(dateOfBirth)
 		if (Number.isNaN(parsedDate.getTime())) {
-			return res.status(400).json({ message: 'Invalid dateOfBirth value' })
+			return fail(400, 'Invalid dateOfBirth value')
 		}
 
 		const existingUser = await User.findOne({
@@ -359,7 +393,7 @@ exports.register = async (req, res) => {
 		})
 		if (existingUser) {
 			const duplicateField = existingUser.phone === phone ? 'Phone' : 'Email'
-			return res.status(409).json({ message: `${duplicateField} already exists` })
+			return fail(409, `${duplicateField} already exists`)
 		}
 
 		const hashedPassword = await bcrypt.hash(password, 12)
@@ -383,7 +417,13 @@ exports.register = async (req, res) => {
 			userPayload.imgURL = `/uploads/${req.file.filename}`
 		}
 
+		if (faceDescriptor) {
+			userPayload.faceDescriptor = faceDescriptor
+			userPayload.faceIdEnabled = true
+		}
+
 		const user = await User.create(userPayload)
+		createdUserId = user._id?.toString?.() || String(user._id || '')
 
 		const accessToken = generateAccessToken(user)
 		const refreshToken = generateRefreshToken(user)
@@ -401,17 +441,26 @@ exports.register = async (req, res) => {
 	} catch (error) {
 		if (error.code === 11000) {
 			const duplicateField = Object.keys(error.keyPattern || {})[0] || 'Field'
+			if (!createdUserId) {
+				removeUploadedFileIfAny(req)
+			}
 			return res.status(409).json({ message: `${duplicateField} already exists` })
 		}
 
 		if (error.name === 'ValidationError') {
 			const firstErrorMessage = Object.values(error.errors || {})[0]?.message
+			if (!createdUserId) {
+				removeUploadedFileIfAny(req)
+			}
 			return res
 				.status(400)
 				.json({ message: firstErrorMessage || 'Validation failed' })
 		}
 
 		console.error('Registration failed:', error)
+		if (!createdUserId) {
+			removeUploadedFileIfAny(req)
+		}
 		res.status(500).json({ message: 'Internal server error' })
 	}
 }
@@ -569,6 +618,55 @@ exports.updateUserRole = async (req, res) => {
 		}
 
 		console.error('Update user role failed:', error)
+		return res.status(500).json({ message: 'Internal server error' })
+	}
+}
+
+exports.deleteUser = async (req, res) => {
+	try {
+		const userId = req.params.userId
+
+		if (!mongoose.isValidObjectId(userId)) {
+			return res.status(400).json({ message: 'Invalid user id' })
+		}
+
+		if (req.user?._id?.toString() === userId) {
+			return res.status(400).json({
+				message: 'You cannot delete your own account in this endpoint',
+			})
+		}
+
+		const user = await User.findById(userId)
+		if (!user) {
+			return res.status(404).json({ message: 'User not found' })
+		}
+
+		if (req.user.role === 'admin') {
+			if (!ADMIN_MANAGEABLE_ROLES.has(user.role)) {
+				return res.status(403).json({
+					message: 'Admin cannot delete admin or superadmin accounts',
+				})
+			}
+		}
+
+		if (req.user.role !== 'superadmin' && user.role === 'superadmin') {
+			return res.status(403).json({ message: 'Only superadmin can delete this account' })
+		}
+
+		const linkedGroup = await Group.findOne({
+			$or: [{ teacher: userId }, { supportTeachers: userId }],
+		}).select('_id name')
+		if (linkedGroup) {
+			return res.status(409).json({
+				message: 'Cannot delete user while assigned to groups',
+			})
+		}
+
+		await User.deleteOne({ _id: userId })
+
+		return res.status(200).json({ message: 'User deleted successfully' })
+	} catch (error) {
+		console.error('Delete user failed:', error)
 		return res.status(500).json({ message: 'Internal server error' })
 	}
 }

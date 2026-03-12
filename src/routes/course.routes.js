@@ -2,7 +2,10 @@ const express = require('express')
 
 const courseController = require('../controllers/course.controller')
 const { requireAuth, allowPermissions, allowRoles } = require('../middleware/auth.middleware')
-const { uploadLessonDocument } = require('../middleware/upload.middleware')
+const {
+	uploadLessonDocument,
+	uploadHomeworkAttachment,
+} = require('../middleware/upload.middleware')
 
 const router = express.Router()
 
@@ -143,7 +146,7 @@ router.delete('/:courseId', allowPermissions('groups:manage'), courseController.
  * @swagger
  * /api/courses/{courseId}/lessons:
  *   get:
- *     tags: [Lessons]
+ *     tags: [Homework]
  *     summary: List lessons for a course
  *     security:
  *       - bearerAuth: []
@@ -161,7 +164,7 @@ router.delete('/:courseId', allowPermissions('groups:manage'), courseController.
  *       404:
  *         description: Course not found
  *   post:
- *     tags: [Lessons]
+ *     tags: [Homework]
  *     summary: Create lesson and attach it to course methodology
  *     security:
  *       - bearerAuth: []
@@ -187,6 +190,13 @@ router.delete('/:courseId', allowPermissions('groups:manage'), courseController.
  *                 maximum: 600
  *               description:
  *                 type: string
+ *               homework:
+ *                 type: string
+ *                 description: Optional homework description or JSON object string with { "description", "links" }.
+ *                 example: '{"description":"Solve exercises 1-5","links":["https://example.com/homework-1"]}'
+ *               homeworkLinks:
+ *                 type: string
+ *                 example: '["https://example.com/homework-1"]'
  *               document:
  *                 type: string
  *                 format: binary
@@ -218,7 +228,7 @@ router.post(
  * @swagger
  * /api/courses/{courseId}/lessons/{lessonId}:
  *   patch:
- *     tags: [Lessons]
+ *     tags: [Homework]
  *     summary: Update lesson in a course
  *     security:
  *       - bearerAuth: []
@@ -251,6 +261,13 @@ router.post(
  *                 maximum: 600
  *               description:
  *                 type: string
+ *               homework:
+ *                 type: string
+ *                 description: Optional homework description or JSON object string with { "description", "links" }.
+ *                 example: '{"description":"Read chapter 2","links":["https://example.com/homework-2"]}'
+ *               homeworkLinks:
+ *                 type: string
+ *                 example: '["https://example.com/homework-1"]'
  *               document:
  *                 type: string
  *                 format: binary
@@ -266,7 +283,7 @@ router.post(
  *       409:
  *         description: Duplicate lesson order
  *   delete:
- *     tags: [Lessons]
+ *     tags: [Homework]
  *     summary: Delete lesson from a course
  *     security:
  *       - bearerAuth: []
@@ -374,6 +391,174 @@ router.delete(
 	'/:courseId/lessons/:lessonId/documents/:documentId',
 	allowRoles('admin', 'superadmin', 'headteacher'),
 	courseController.deleteLessonDocument,
+)
+
+/**
+ * @swagger
+ * /api/courses/{courseId}/lessons/{lessonId}/homework:
+ *   get:
+ *     tags: [Lessons]
+ *     summary: Get homework for a lesson
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: courseId
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: path
+ *         name: lessonId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Lesson homework
+ *       400:
+ *         description: Invalid id
+ *       404:
+ *         description: Lesson not found
+ *   patch:
+ *     tags: [Lessons]
+ *     summary: Update homework for a lesson
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: courseId
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: path
+ *         name: lessonId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               homework:
+ *                 type: string
+ *                 description: Optional homework description or JSON object string with { "description", "links" }.
+ *                 example: '{"description":"Solve exercises 1-5","links":["https://example.com/homework-1"]}'
+ *               description:
+ *                 type: string
+ *                 maxLength: 1000
+ *               links:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *     responses:
+ *       200:
+ *         description: Homework updated successfully
+ *       400:
+ *         description: Validation failed
+ *       403:
+ *         description: Forbidden
+ *       404:
+ *         description: Lesson not found
+ */
+router.get(
+	'/:courseId/lessons/:lessonId/homework',
+	allowPermissions('groups:read'),
+	courseController.getLessonHomework,
+)
+router.patch(
+	'/:courseId/lessons/:lessonId/homework',
+	allowRoles('admin', 'superadmin', 'headteacher'),
+	courseController.updateLessonHomework,
+)
+
+/**
+ * @swagger
+ * /api/courses/{courseId}/lessons/{lessonId}/homework/documents:
+ *   post:
+ *     tags: [Lessons]
+ *     summary: Upload homework attachment
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: courseId
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: path
+ *         name: lessonId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required: [document]
+ *             properties:
+ *               document:
+ *                 type: string
+ *                 format: binary
+ *     responses:
+ *       201:
+ *         description: Homework document uploaded
+ *       400:
+ *         description: Validation failed
+ *       403:
+ *         description: Forbidden
+ *       404:
+ *         description: Lesson not found
+ */
+router.post(
+	'/:courseId/lessons/:lessonId/homework/documents',
+	allowRoles('admin', 'superadmin', 'headteacher'),
+	uploadHomeworkAttachment,
+	courseController.uploadLessonHomeworkDocument,
+)
+
+/**
+ * @swagger
+ * /api/courses/{courseId}/lessons/{lessonId}/homework/documents/{documentId}:
+ *   delete:
+ *     tags: [Lessons]
+ *     summary: Delete homework attachment
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: courseId
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: path
+ *         name: lessonId
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: path
+ *         name: documentId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Homework document deleted
+ *       400:
+ *         description: Invalid id
+ *       403:
+ *         description: Forbidden
+ *       404:
+ *         description: Lesson or document not found
+ */
+router.delete(
+	'/:courseId/lessons/:lessonId/homework/documents/:documentId',
+	allowRoles('admin', 'superadmin', 'headteacher'),
+	courseController.deleteLessonHomeworkDocument,
 )
 
 /**

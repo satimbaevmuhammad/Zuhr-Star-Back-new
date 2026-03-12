@@ -26,6 +26,7 @@ const options = {
 			{ name: 'Groups', description: 'Group CRUD, membership, and attendance' },
 			{ name: 'Courses', description: 'Course CRUD and methodology management' },
 			{ name: 'Lessons', description: 'Lessons linked to specific courses' },
+			{ name: 'Homework', description: 'Homework assignments and submissions' },
 			{ name: 'System', description: 'System endpoints' },
 		],
 		components: {
@@ -85,6 +86,16 @@ const options = {
 						order: { type: 'integer', minimum: 1, example: 1 },
 						durationMinutes: { type: 'integer', minimum: 1, example: 90 },
 						description: { type: 'string', example: 'Introduction to numbers and operations' },
+						homework: { type: 'string', example: 'Solve exercises 1-10 on page 12' },
+						homeworkLinks: {
+							type: 'array',
+							items: { type: 'string' },
+							example: ['https://example.com/worksheet-1'],
+						},
+						homeworkDocuments: {
+							type: 'array',
+							items: { $ref: '#/components/schemas/LessonDocument' },
+						},
 						documents: {
 							type: 'array',
 							items: { $ref: '#/components/schemas/LessonDocument' },
@@ -115,6 +126,33 @@ const options = {
 						title: { type: 'string', example: 'Lesson 1: Algebra Basics' },
 						durationMinutes: { type: 'integer', minimum: 1, example: 90 },
 						description: { type: 'string', example: 'Variables and simple equations' },
+						homework: {
+							oneOf: [
+								{
+									type: 'string',
+									example: 'Practice equations 1-5 in the workbook',
+								},
+								{
+									type: 'object',
+									properties: {
+										description: {
+											type: 'string',
+											example: 'Practice equations 1-5 in the workbook',
+										},
+										links: {
+											type: 'array',
+											items: { type: 'string' },
+											example: ['https://example.com/homework-1'],
+										},
+									},
+								},
+							],
+						},
+						homeworkLinks: {
+							type: 'array',
+							items: { type: 'string' },
+							example: ['https://example.com/homework-1'],
+						},
 					},
 				},
 				LessonUpdateInput: {
@@ -123,6 +161,89 @@ const options = {
 						title: { type: 'string', example: 'Lesson 1: Algebra Basics' },
 						durationMinutes: { type: 'integer', minimum: 1, example: 100 },
 						description: { type: 'string', example: 'Updated lesson description' },
+						homework: {
+							oneOf: [
+								{
+									type: 'string',
+									example: 'Review formulas on page 3',
+								},
+								{
+									type: 'object',
+									properties: {
+										description: {
+											type: 'string',
+											example: 'Review formulas on page 3',
+										},
+										links: {
+											type: 'array',
+											items: { type: 'string' },
+											example: ['https://example.com/homework-1'],
+										},
+									},
+								},
+							],
+						},
+						homeworkLinks: {
+							type: 'array',
+							items: { type: 'string' },
+							example: ['https://example.com/homework-1'],
+						},
+					},
+				},
+				HomeworkAssignment: {
+					type: 'object',
+					properties: {
+						description: {
+							type: 'string',
+							example: 'Solve exercises 1-10 on page 12',
+						},
+						links: {
+							type: 'array',
+							items: { type: 'string' },
+							example: ['https://example.com/worksheet-1'],
+						},
+						documents: {
+							type: 'array',
+							items: { $ref: '#/components/schemas/LessonDocument' },
+						},
+					},
+				},
+				HomeworkSubmission: {
+					type: 'object',
+					properties: {
+						_id: { type: 'string', example: '65f12ca7a7720c194de6d101' },
+						lesson: {
+							oneOf: [{ type: 'string' }, { $ref: '#/components/schemas/Lesson' }],
+						},
+						student: {
+							oneOf: [{ type: 'string' }, { $ref: '#/components/schemas/Student' }],
+						},
+						group: {
+							oneOf: [{ type: 'string' }, { $ref: '#/components/schemas/Group' }],
+						},
+						description: { type: 'string', example: 'My homework notes' },
+						links: {
+							type: 'array',
+							items: { type: 'string' },
+							example: ['https://example.com/solution'],
+						},
+						documents: {
+							type: 'array',
+							items: { $ref: '#/components/schemas/LessonDocument' },
+						},
+						status: {
+							type: 'string',
+							enum: ['submitted', 'approved'],
+						},
+						score: { type: 'number', example: 85 },
+						attemptsCount: { type: 'integer', example: 1 },
+						submittedAt: { type: 'string', format: 'date-time' },
+						checkedBy: {
+							oneOf: [{ type: 'string' }, { $ref: '#/components/schemas/User' }],
+						},
+						checkedAt: { type: 'string', format: 'date-time' },
+						createdAt: { type: 'string', format: 'date-time' },
+						updatedAt: { type: 'string', format: 'date-time' },
 					},
 				},
 				CourseCreateInput: {
@@ -393,6 +514,15 @@ const options = {
 						groups: {
 							type: 'array',
 							items: { $ref: '#/components/schemas/StudentGroupInput' },
+						},
+						homeworks: {
+							type: 'array',
+							items: {
+								oneOf: [
+									{ type: 'string' },
+									{ $ref: '#/components/schemas/HomeworkSubmission' },
+								],
+							},
 						},
 						createdAt: { type: 'string', format: 'date-time' },
 						updatedAt: { type: 'string', format: 'date-time' },

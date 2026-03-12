@@ -57,6 +57,13 @@ const router = express.Router()
  *               location:
  *                 type: string
  *                 example: '{"type":"Point","coordinates":[69.2401,41.2995]}'
+ *               faceDescriptor:
+ *                 type: array
+ *                 minItems: 128
+ *                 maxItems: 128
+ *                 description: Optional Face ID descriptor. Also accepted as "descriptor" in JSON.
+ *                 items:
+ *                   type: number
  *               avatar:
  *                 type: string
  *                 format: binary
@@ -139,39 +146,6 @@ router.post('/login', authController.login)
  *         description: Face not recognized
  */
 router.post('/login/face', authController.loginWithFaceId)
-
-/**
- * @swagger
- * /api/auth/face/register:
- *   post:
- *     tags: [Auth]
- *     summary: Register or update current user's Face ID descriptor
- *     description: Swagger UI cannot open webcam and generate descriptor automatically. Use /face-id-demo for camera-based testing.
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required: [descriptor]
- *             properties:
- *               descriptor:
- *                 type: array
- *                 minItems: 128
- *                 maxItems: 128
- *                 items:
- *                   type: number
- *     responses:
- *       200:
- *         description: Face ID registered
- *       400:
- *         description: Validation failed
- *       401:
- *         description: Unauthorized
- */
-router.post('/face/register', requireAuth, authController.registerFaceId)
 
 /**
  * @swagger
@@ -310,6 +284,39 @@ router.patch(
 	requireAuth,
 	allowPermissions('users:manage_roles'),
 	authController.updateUserRole,
+)
+
+/**
+ * @swagger
+ * /api/auth/users/{userId}:
+ *   delete:
+ *     tags: [Auth]
+ *     summary: Delete user
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: User deleted successfully
+ *       400:
+ *         description: Validation failed
+ *       403:
+ *         description: Forbidden
+ *       404:
+ *         description: User not found
+ *       409:
+ *         description: User has linked groups
+ */
+router.delete(
+	'/users/:userId',
+	requireAuth,
+	allowPermissions('users:manage'),
+	authController.deleteUser,
 )
 
 module.exports = router

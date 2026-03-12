@@ -102,12 +102,29 @@ const studentSchema = new mongoose.Schema(
 				message: 'Student cannot be attached to the same group twice',
 			},
 		},
+		homeworks: {
+			type: [
+				{
+					type: mongoose.Schema.Types.ObjectId,
+					ref: 'HomeworkSubmission',
+				},
+			],
+			default: [],
+			validate: {
+				validator: value => {
+					const ids = value.map(item => item.toString())
+					return new Set(ids).size === ids.length
+				},
+				message: 'homeworks list cannot contain duplicates',
+			},
+		},
 	},
 	{ timestamps: true },
 )
 
 studentSchema.index({ parentPhone: 1 })
 studentSchema.index({ 'groups.group': 1 })
+studentSchema.index({ homeworks: 1 })
 
 studentSchema.pre('validate', async function () {
 	this.groupAttached =

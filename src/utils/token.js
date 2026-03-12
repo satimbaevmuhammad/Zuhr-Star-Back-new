@@ -17,7 +17,7 @@ const generateAccessToken = user => {
 	return jwt.sign(
 		{ id: user._id, role: user.role },
 		secret,
-		{ expiresIn: '15m' },
+		{ expiresIn: '5h' },
 	)
 }
 
@@ -29,6 +29,17 @@ const generateRefreshToken = user => {
 		expiresIn: '7d',
 		jwtid: crypto.randomUUID(),
 	})
+}
+
+const generateStudentAccessToken = student => {
+	const secret = getAccessSecret()
+	ensureSecret(secret, 'JWT_ACCESS_SECRET or JWT_SECRET')
+
+	return jwt.sign(
+		{ id: student._id, role: 'student', type: 'student' },
+		secret,
+		{ expiresIn: '5h' },
+	)
 }
 
 const verifyAccessToken = token => {
@@ -46,6 +57,7 @@ const verifyRefreshToken = token => {
 module.exports = {
 	generateAccessToken,
 	generateRefreshToken,
+	generateStudentAccessToken,
 	verifyAccessToken,
 	verifyRefreshToken,
 }

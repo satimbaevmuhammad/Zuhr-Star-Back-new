@@ -9,7 +9,7 @@ const { getGroupsCountByCourseIds } = require('../services/course-sync.service')
 const { toPublicUrl } = require('../utils/public-url')
 
 const LESSON_SELECT =
-	'title order durationMinutes description course documents createdAt updatedAt'
+	'title order durationMinutes description homework homeworkLinks homeworkDocuments course documents createdAt updatedAt'
 
 const safeUnlinkIfExists = filePath => {
 	try {
@@ -42,6 +42,13 @@ const normalizeLessonResponse = (lessonDocument, req) => {
 	lesson.documents = Array.isArray(lesson.documents)
 		? lesson.documents.map(document => normalizeLessonDocument(document, req))
 		: []
+	lesson.homeworkDocuments = Array.isArray(lesson.homeworkDocuments)
+		? lesson.homeworkDocuments.map(document => normalizeLessonDocument(document, req))
+		: []
+
+	if (!Array.isArray(lesson.homeworkLinks)) {
+		lesson.homeworkLinks = []
+	}
 
 	return lesson
 }
@@ -101,6 +108,140 @@ const parseLessonDurationMinutes = value => {
 	}
 
 	return durationMinutes
+}
+
+const parseHomework = value => {
+	if (typeof value === 'undefined') {
+		return undefined
+	}
+
+	const homework = String(value || '').trim()
+	if (homework.length > 1000) {
+		return null
+	}
+
+	return homework
+}
+
+const parseHomeworkLinks = value => {
+	if (typeof value === 'undefined') {
+		return undefined
+	}
+
+	let parsed = value
+	if (typeof parsed === 'string') {
+		const trimmed = parsed.trim()
+		if (!trimmed) {
+			return []
+		}
+
+		try {
+			parsed = JSON.parse(trimmed)
+		} catch (error) {
+			parsed = trimmed.split(',').map(item => item.trim())
+		}
+	}
+
+	if (!Array.isArray(parsed)) {
+		parsed = [parsed]
+	}
+
+	const normalized = parsed.map(link => String(link || '').trim()).filter(Boolean)
+	if (normalized.length > 20) {
+		return null
+	}
+
+	if (normalized.some(link => link.length > 500)) {
+		return null
+	}
+
+	if (new Set(normalized).size !== normalized.length) {
+		return null
+	}
+
+	return normalized
+}
+
+const parseHomeworkPayload = (payload = {}, { descriptionAliasKey } = {}) => {
+	const hasHomeworkKey = Object.prototype.hasOwnProperty.call(payload, 'homework')
+	const hasLinksKey =
+		Object.prototype.hasOwnProperty.call(payload, 'homeworkLinks') ||
+		Object.prototype.hasOwnProperty.call(payload, 'links')
+	const hasDescriptionAlias =
+		descriptionAliasKey &&
+		Object.prototype.hasOwnProperty.call(payload, descriptionAliasKey) &&
+		!hasHomeworkKey
+
+	let descriptionInput
+	let linksInput
+
+	if (hasHomeworkKey) {
+		const value = payload.homework
+		if (value && typeof value === 'object' && !Array.isArray(value)) {
+			if (Object.prototype.hasOwnProperty.call(value, 'description')) {
+				descriptionInput = value.description
+			}
+			if (Object.prototype.hasOwnProperty.call(value, 'links')) {
+				linksInput = value.links
+			}
+		} else if (typeof value === 'string') {
+			const trimmed = value.trim()
+			if (!trimmed) {
+				descriptionInput = ''
+			} else {
+				try {
+					const parsed = JSON.parse(trimmed)
+					if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+						if (Object.prototype.hasOwnProperty.call(parsed, 'description')) {
+							descriptionInput = parsed.description
+						}
+						if (Object.prototype.hasOwnProperty.call(parsed, 'links')) {
+							linksInput = parsed.links
+						}
+					} else {
+						descriptionInput = value
+					}
+				} catch (error) {
+					descriptionInput = value
+				}
+			}
+		} else {
+			descriptionInput = value
+		}
+	} else if (hasDescriptionAlias) {
+		descriptionInput = payload[descriptionAliasKey]
+	}
+
+	if (typeof linksInput === 'undefined' && hasLinksKey) {
+		linksInput = Object.prototype.hasOwnProperty.call(payload, 'homeworkLinks')
+			? payload.homeworkLinks
+			: payload.links
+	}
+
+	let description
+	if (typeof descriptionInput !== 'undefined') {
+		description = parseHomework(descriptionInput)
+		if (description === null) {
+			return { error: 'homework must be 1000 characters or less' }
+		}
+	}
+
+	let links
+	if (typeof linksInput !== 'undefined') {
+		links = parseHomeworkLinks(linksInput)
+		if (links === null) {
+			return {
+				error: 'homeworkLinks must be an array of up to 20 links, 500 chars max each',
+			}
+		}
+	}
+
+	return {
+		hasDescription: typeof descriptionInput !== 'undefined',
+		hasLinks: typeof linksInput !== 'undefined',
+		description,
+		links,
+	}
 }
 
 const getNextLessonOrder = async courseId => {
@@ -338,9 +479,15 @@ exports.deleteCourse = async (req, res) => {
 			})
 		}
 
-		const lessons = await Lesson.find({ course: courseId }).select('documents filename')
+		const lessons = await Lesson.find({ course: courseId }).select(
+			'documents homeworkDocuments',
+		)
 		for (const lesson of lessons) {
-			for (const document of lesson.documents || []) {
+			const lessonDocuments = [
+				...(lesson.documents || []),
+				...(lesson.homeworkDocuments || []),
+			]
+			for (const document of lessonDocuments) {
 				const filename = String(document.filename || '').trim()
 				if (filename) {
 					safeUnlinkIfExists(path.join(process.cwd(), 'uploads', filename))
@@ -401,6 +548,12 @@ exports.createCourseLesson = async (req, res) => {
 			})
 		}
 
+		const homeworkPayload = parseHomeworkPayload(req.body)
+		if (homeworkPayload.error) {
+			safeUnlinkIfExists(uploadedFilePath)
+			return res.status(400).json({ message: homeworkPayload.error })
+		}
+
 		const nextOrder = await getNextLessonOrder(courseId)
 		if (nextOrder > maxLessons) {
 			safeUnlinkIfExists(uploadedFilePath)
@@ -421,6 +574,14 @@ exports.createCourseLesson = async (req, res) => {
 
 		if (typeof req.body.description !== 'undefined') {
 			payload.description = String(req.body.description || '').trim()
+		}
+
+		if (homeworkPayload.hasDescription) {
+			payload.homework = homeworkPayload.description
+		}
+
+		if (homeworkPayload.hasLinks) {
+			payload.homeworkLinks = homeworkPayload.links
 		}
 
 		if (req.file) {
@@ -529,6 +690,20 @@ exports.updateCourseLesson = async (req, res) => {
 			lesson.description = String(req.body.description || '').trim()
 		}
 
+		const homeworkPayload = parseHomeworkPayload(req.body)
+		if (homeworkPayload.error) {
+			safeUnlinkIfExists(uploadedFilePath)
+			return res.status(400).json({ message: homeworkPayload.error })
+		}
+
+		if (homeworkPayload.hasDescription) {
+			lesson.homework = homeworkPayload.description
+		}
+
+		if (homeworkPayload.hasLinks) {
+			lesson.homeworkLinks = homeworkPayload.links
+		}
+
 		if (req.file) {
 			lesson.documents.push(buildLessonDocumentPayload(req.file, req.user?._id))
 		}
@@ -581,7 +756,11 @@ exports.deleteCourseLesson = async (req, res) => {
 			Group.updateMany({ courseRef: courseId }, { $pull: { lessons: lesson._id } }),
 		])
 
-		for (const document of lesson.documents || []) {
+		const lessonDocuments = [
+			...(lesson.documents || []),
+			...(lesson.homeworkDocuments || []),
+		]
+		for (const document of lessonDocuments) {
 			const filename = String(document.filename || '').trim()
 			if (filename) {
 				safeUnlinkIfExists(path.join(process.cwd(), 'uploads', filename))
@@ -733,6 +912,213 @@ exports.deleteLessonDocument = async (req, res) => {
 		}
 
 		console.error('Delete lesson document failed:', error)
+		return res.status(500).json({ message: 'Internal server error' })
+	}
+}
+
+exports.getLessonHomework = async (req, res) => {
+	try {
+		const courseId = req.params.courseId
+		const lessonId = req.params.lessonId
+
+		if (!mongoose.isValidObjectId(courseId)) {
+			return res.status(400).json({ message: 'Invalid course id' })
+		}
+
+		if (!mongoose.isValidObjectId(lessonId)) {
+			return res.status(400).json({ message: 'Invalid lesson id' })
+		}
+
+		const lesson = await Lesson.findOne({ _id: lessonId, course: courseId }).select(
+			'homework homeworkLinks homeworkDocuments',
+		)
+		if (!lesson) {
+			return res.status(404).json({ message: 'Lesson not found in this course' })
+		}
+
+		return res.status(200).json({
+			courseId,
+			lessonId,
+			homework: {
+				description: lesson.homework || '',
+				links: Array.isArray(lesson.homeworkLinks) ? lesson.homeworkLinks : [],
+				documents: Array.isArray(lesson.homeworkDocuments)
+					? lesson.homeworkDocuments.map(document => normalizeLessonDocument(document, req))
+					: [],
+			},
+		})
+	} catch (error) {
+		console.error('Get lesson homework failed:', error)
+		return res.status(500).json({ message: 'Internal server error' })
+	}
+}
+
+exports.updateLessonHomework = async (req, res) => {
+	try {
+		const courseId = req.params.courseId
+		const lessonId = req.params.lessonId
+
+		if (!mongoose.isValidObjectId(courseId)) {
+			return res.status(400).json({ message: 'Invalid course id' })
+		}
+
+		if (!mongoose.isValidObjectId(lessonId)) {
+			return res.status(400).json({ message: 'Invalid lesson id' })
+		}
+
+		const homeworkPayload = parseHomeworkPayload(req.body, { descriptionAliasKey: 'description' })
+		if (homeworkPayload.error) {
+			return res.status(400).json({ message: homeworkPayload.error })
+		}
+
+		if (!homeworkPayload.hasDescription && !homeworkPayload.hasLinks) {
+			return res.status(400).json({
+				message: 'homework description or links are required',
+			})
+		}
+
+		const lesson = await Lesson.findOne({ _id: lessonId, course: courseId })
+		if (!lesson) {
+			return res.status(404).json({ message: 'Lesson not found in this course' })
+		}
+
+		if (homeworkPayload.hasDescription) {
+			lesson.homework = homeworkPayload.description
+		}
+		if (homeworkPayload.hasLinks) {
+			lesson.homeworkLinks = homeworkPayload.links
+		}
+		await lesson.save()
+
+		return res.status(200).json({
+			message: 'Homework updated successfully',
+			courseId,
+			lessonId,
+			homework: {
+				description: lesson.homework || '',
+				links: Array.isArray(lesson.homeworkLinks) ? lesson.homeworkLinks : [],
+				documents: Array.isArray(lesson.homeworkDocuments)
+					? lesson.homeworkDocuments.map(document => normalizeLessonDocument(document, req))
+					: [],
+			},
+		})
+	} catch (error) {
+		if (error.name === 'ValidationError') {
+			const firstErrorMessage = Object.values(error.errors || {})[0]?.message
+			return res.status(400).json({ message: firstErrorMessage || 'Validation failed' })
+		}
+
+		console.error('Update lesson homework failed:', error)
+		return res.status(500).json({ message: 'Internal server error' })
+	}
+}
+
+exports.uploadLessonHomeworkDocument = async (req, res) => {
+	const uploadedFilePath = req.file?.path
+
+	try {
+		const courseId = req.params.courseId
+		const lessonId = req.params.lessonId
+
+		if (!mongoose.isValidObjectId(courseId)) {
+			safeUnlinkIfExists(uploadedFilePath)
+			return res.status(400).json({ message: 'Invalid course id' })
+		}
+
+		if (!mongoose.isValidObjectId(lessonId)) {
+			safeUnlinkIfExists(uploadedFilePath)
+			return res.status(400).json({ message: 'Invalid lesson id' })
+		}
+
+		if (!req.file) {
+			return res.status(400).json({
+				message: 'homework document file is required',
+			})
+		}
+
+		const lesson = await Lesson.findOne({ _id: lessonId, course: courseId })
+		if (!lesson) {
+			safeUnlinkIfExists(uploadedFilePath)
+			return res.status(404).json({ message: 'Lesson not found in this course' })
+		}
+
+		const documentPayload = buildLessonDocumentPayload(req.file, req.user?._id)
+
+		lesson.homeworkDocuments.push(documentPayload)
+		await lesson.save()
+
+		const uploadedDocument =
+			lesson.homeworkDocuments[lesson.homeworkDocuments.length - 1]
+
+		return res.status(201).json({
+			message: 'Homework document uploaded successfully',
+			courseId,
+			lessonId,
+			document: normalizeLessonDocument(uploadedDocument, req),
+		})
+	} catch (error) {
+		safeUnlinkIfExists(uploadedFilePath)
+
+		if (error.name === 'ValidationError') {
+			const firstErrorMessage = Object.values(error.errors || {})[0]?.message
+			return res.status(400).json({ message: firstErrorMessage || 'Validation failed' })
+		}
+
+		console.error('Upload homework document failed:', error)
+		return res.status(500).json({ message: 'Internal server error' })
+	}
+}
+
+exports.deleteLessonHomeworkDocument = async (req, res) => {
+	try {
+		const courseId = req.params.courseId
+		const lessonId = req.params.lessonId
+		const documentId = req.params.documentId
+
+		if (!mongoose.isValidObjectId(courseId)) {
+			return res.status(400).json({ message: 'Invalid course id' })
+		}
+
+		if (!mongoose.isValidObjectId(lessonId)) {
+			return res.status(400).json({ message: 'Invalid lesson id' })
+		}
+
+		if (!mongoose.isValidObjectId(documentId)) {
+			return res.status(400).json({ message: 'Invalid document id' })
+		}
+
+		const lesson = await Lesson.findOne({ _id: lessonId, course: courseId })
+		if (!lesson) {
+			return res.status(404).json({ message: 'Lesson not found in this course' })
+		}
+
+		const documentIndex = (lesson.homeworkDocuments || []).findIndex(
+			document => document._id.toString() === documentId,
+		)
+		if (documentIndex === -1) {
+			return res.status(404).json({ message: 'Homework document not found' })
+		}
+
+		const document = lesson.homeworkDocuments[documentIndex]
+		const filename = String(document.filename || '').trim()
+
+		lesson.homeworkDocuments.splice(documentIndex, 1)
+		await lesson.save()
+
+		if (filename) {
+			safeUnlinkIfExists(path.join(process.cwd(), 'uploads', filename))
+		}
+
+		return res.status(200).json({
+			message: 'Homework document deleted successfully',
+		})
+	} catch (error) {
+		if (error.name === 'ValidationError') {
+			const firstErrorMessage = Object.values(error.errors || {})[0]?.message
+			return res.status(400).json({ message: firstErrorMessage || 'Validation failed' })
+		}
+
+		console.error('Delete homework document failed:', error)
 		return res.status(500).json({ message: 'Internal server error' })
 	}
 }

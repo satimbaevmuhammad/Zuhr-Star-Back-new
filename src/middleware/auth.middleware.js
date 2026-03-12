@@ -1,6 +1,7 @@
 const fs = require('fs')
 
 const User = require('../model/user.model')
+const Student = require('../model/student.model')
 const { verifyAccessToken } = require('../utils/token')
 
 const ROLE_PERMISSIONS = Object.freeze({
@@ -69,6 +70,30 @@ const requireAuth = async (req, res, next) => {
 		}
 
 		req.user = user
+		next()
+	} catch (error) {
+		return res.status(401).json({ message: 'Invalid or expired access token' })
+	}
+}
+
+const requireStudentAuth = async (req, res, next) => {
+	try {
+		const token = extractBearerToken(req.headers.authorization)
+		if (!token) {
+			return res.status(401).json({ message: 'Authorization token missing' })
+		}
+
+		const payload = verifyAccessToken(token)
+		if (payload?.type !== 'student') {
+			return res.status(401).json({ message: 'Invalid student token' })
+		}
+
+		const student = await Student.findById(payload.id)
+		if (!student) {
+			return res.status(401).json({ message: 'Invalid token student' })
+		}
+
+		req.student = student
 		next()
 	} catch (error) {
 		return res.status(401).json({ message: 'Invalid or expired access token' })
@@ -156,6 +181,7 @@ module.exports = {
 	canCreateRoleViaRegister,
 	extractBearerToken,
 	requireAuth,
+	requireStudentAuth,
 	allowRoles,
 	allowPermissions,
 	requireRegisterPermission,
