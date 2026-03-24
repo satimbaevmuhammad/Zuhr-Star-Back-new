@@ -27,6 +27,9 @@ const options = {
 			{ name: 'Courses', description: 'Course CRUD and methodology management' },
 			{ name: 'Lessons', description: 'Lessons linked to specific courses' },
 			{ name: 'Homework', description: 'Homework assignments and submissions' },
+			{ name: 'Finance', description: 'Employee finance — bonuses and fines' },
+			{ name: 'Forbidden', description: 'Forbidden behavior rules and employee violations' },
+			{ name: 'ExtraLessons', description: 'Extra lessons managed by up to 3 global support teachers' },
 			{ name: 'System', description: 'System endpoints' },
 		],
 		components: {

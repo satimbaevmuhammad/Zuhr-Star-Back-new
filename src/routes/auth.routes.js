@@ -16,7 +16,7 @@ const router = express.Router()
  *   post:
  *     tags: [Auth]
  *     summary: Register a user
- *     description: Register is protected. Only superadmin can create teacher/supporteacher/headteacher/admin. Employees cannot self-register.
+ *     description: Protected. Only superadmin can create employees (teacher/supporteacher/headteacher/admin). Returns the created user. To set Face ID at creation time, include faceDescriptor in the body.
  *     security:
  *       - bearerAuth: []
  *     requestBody:
@@ -150,9 +150,35 @@ router.post('/login/face', authController.loginWithFaceId)
 /**
  * @swagger
  * /api/auth/face:
+ *   patch:
+ *     tags: [Auth]
+ *     summary: Register or update Face ID for current user
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [descriptor]
+ *             properties:
+ *               descriptor:
+ *                 type: array
+ *                 minItems: 128
+ *                 maxItems: 128
+ *                 items:
+ *                   type: number
+ *     responses:
+ *       200:
+ *         description: Face ID registered
+ *       400:
+ *         description: Invalid descriptor
+ *       401:
+ *         description: Unauthorized
  *   delete:
  *     tags: [Auth]
- *     summary: Remove current user's Face ID descriptor
+ *     summary: Remove current user's Face ID
  *     security:
  *       - bearerAuth: []
  *     responses:
@@ -161,6 +187,7 @@ router.post('/login/face', authController.loginWithFaceId)
  *       401:
  *         description: Unauthorized
  */
+router.patch('/face', requireAuth, authController.updateFaceId)
 router.delete('/face', requireAuth, authController.removeFaceId)
 
 /**
@@ -230,12 +257,28 @@ router.get('/me', requireAuth, authController.me)
  *       - bearerAuth: []
  *     parameters:
  *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *           default: 1
+ *       - in: query
  *         name: limit
  *         schema:
  *           type: integer
  *           minimum: 1
  *           maximum: 100
  *           default: 20
+ *       - in: query
+ *         name: search
+ *         schema:
+ *           type: string
+ *         description: Search by fullname, phone, or email
+ *       - in: query
+ *         name: role
+ *         schema:
+ *           type: string
+ *           enum: [teacher, supporteacher, headteacher, admin, superadmin]
  *     responses:
  *       200:
  *         description: User list

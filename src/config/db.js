@@ -1,5 +1,8 @@
 const mongoose = require('mongoose')
 
+const MAX_RETRIES = 5
+const RETRY_DELAY_MS = 5000
+
 const connectDB = async () => {
 	const mongoUri = process.env.MONGO_URI
 
@@ -7,14 +10,23 @@ const connectDB = async () => {
 		throw new Error('MONGO_URI is required')
 	}
 
-	try {
-		await mongoose.connect(mongoUri, {
-			serverSelectionTimeoutMS: 10000,
-		})
-		console.log('MongoDB connected successfully')
-	} catch (error) {
-		console.error('MongoDB connection failed:', error.message)
-		throw error
+	for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+		try {
+			await mongoose.connect(mongoUri, {
+				serverSelectionTimeoutMS: 15000,
+			})
+			console.log('MongoDB connected successfully')
+			return
+		} catch (error) {
+			console.error(`MongoDB connection attempt ${attempt}/${MAX_RETRIES} failed: ${error.message}`)
+
+			if (attempt === MAX_RETRIES) {
+				throw error
+			}
+
+			console.log(`Retrying in ${RETRY_DELAY_MS / 1000}s...`)
+			await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS))
+		}
 	}
 }
 

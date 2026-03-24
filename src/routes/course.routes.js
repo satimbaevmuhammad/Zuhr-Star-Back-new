@@ -146,7 +146,7 @@ router.delete('/:courseId', allowPermissions('groups:manage'), courseController.
  * @swagger
  * /api/courses/{courseId}/lessons:
  *   get:
- *     tags: [Homework]
+ *     tags: [Lessons]
  *     summary: List lessons for a course
  *     security:
  *       - bearerAuth: []
@@ -164,7 +164,7 @@ router.delete('/:courseId', allowPermissions('groups:manage'), courseController.
  *       404:
  *         description: Course not found
  *   post:
- *     tags: [Homework]
+ *     tags: [Lessons]
  *     summary: Create lesson and attach it to course methodology
  *     security:
  *       - bearerAuth: []

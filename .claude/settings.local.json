@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(wc:*)",
+      "Bash(grep -r \"TODO\\\\|FIXME\\\\|BUG\\\\|HACK\" /d/Desktop/BackZuhr/src --include=*.js)",
+      "Bash(npm test:*)",
+      "Bash(grep -r \"eval\\\\|exec\\\\|Function\\\\\\(\" /d/Desktop/BackZuhr/src --include=*.js)"
+    ]
+  }
+}

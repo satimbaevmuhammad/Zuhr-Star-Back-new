@@ -2,6 +2,26 @@ const mongoose = require('mongoose')
 
 const allowedRoles = ['teacher', 'supporteacher', 'headteacher', 'admin', 'superadmin']
 
+const forbidenEntrySchema = new mongoose.Schema(
+	{
+		rule: {
+			type: mongoose.Schema.Types.ObjectId,
+			ref: 'ForbiddenRule',
+			required: true,
+		},
+		violationId: {
+			type: mongoose.Schema.Types.ObjectId,
+			ref: 'EmployeeViolation',
+			required: true,
+		},
+		ruleName: { type: String, required: true },
+		fineAmount: { type: Number, default: 0 },
+		note: { type: String, maxlength: 500 },
+		recordedAt: { type: Date, default: Date.now },
+	},
+	{ _id: false },
+)
+
 const locationSchema = new mongoose.Schema(
 	{
 		type: {
@@ -113,6 +133,18 @@ const userSchema = new mongoose.Schema(
 		imgURL: {
 			type: String,
 			default: '/uploads/default-avatar.png',
+		},
+		isExtraLessonSupport: {
+			type: Boolean,
+			default: false,
+		},
+		forbidens: {
+			type: [forbidenEntrySchema],
+			default: [],
+		},
+		financeBalance: {
+			type: Number,
+			default: 0,
 		},
 	},
 	{ timestamps: true },

@@ -10,7 +10,10 @@ const PHONE_PATTERN = /^\+?[0-9]{7,15}$/
 const STUDENT_GROUP_STATUSES = ['active', 'paused', 'completed', 'left']
 
 const sanitizeStudent = studentDocument => {
-	return studentDocument?.toObject ? studentDocument.toObject() : { ...studentDocument }
+	const obj = studentDocument?.toObject ? studentDocument.toObject() : { ...studentDocument }
+	delete obj.password
+	delete obj.balanceResetAt
+	return obj
 }
 
 exports.loginStudent = async (req, res) => {
@@ -24,6 +27,10 @@ exports.loginStudent = async (req, res) => {
 
 		const student = await Student.findOne({ studentPhone }).select('+password')
 		if (!student) {
+			return res.status(401).json({ message: 'Invalid credentials' })
+		}
+
+		if (!student.password) {
 			return res.status(401).json({ message: 'Invalid credentials' })
 		}
 

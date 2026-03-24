@@ -1,4 +1,5 @@
 const fs = require('fs')
+const path = require('path')
 const mongoose = require('mongoose')
 const User = require('../model/user.model')
 const Group = require('../model/group.model')
@@ -132,6 +133,15 @@ const removeUploadedFileIfAny = req => {
 	}
 }
 
+const resolveLocalUploadPath = imgURL => {
+	if (typeof imgURL !== 'string' || !imgURL.startsWith('/uploads/')) {
+		return null
+	}
+
+	const normalizedPath = imgURL.replace(/^[\\/]+/, '')
+	return path.join(process.cwd(), normalizedPath)
+}
+
 const sanitizeUser = (userDocument, req) => {
 	const user = userDocument?.toObject ? userDocument.toObject() : { ...userDocument }
 	delete user.password
@@ -178,12 +188,8 @@ exports.login = async (req, res) => {
 	}
 }
 
-exports.registerFaceId = async (req, res) => {
+exports.updateFaceId = async (req, res) => {
 	try {
-		if (!req.user) {
-			return res.status(401).json({ message: 'Unauthorized' })
-		}
-
 		const descriptor = parseFaceDescriptor(req.body.descriptor)
 		if (!descriptor) {
 			return res.status(400).json({
@@ -210,7 +216,7 @@ exports.registerFaceId = async (req, res) => {
 			return res.status(400).json({ message: firstErrorMessage || 'Validation failed' })
 		}
 
-		console.error('Register Face ID failed:', error)
+		console.error('Update Face ID failed:', error)
 		return res.status(500).json({ message: 'Internal server error' })
 	}
 }
@@ -357,18 +363,6 @@ exports.register = async (req, res) => {
 			return fail(403, 'Superadmin cannot be created from register endpoint')
 		}
 
-		if (!req.user) {
-			return fail(401, 'Authorization token missing')
-		}
-
-		const creatorRole = req.user.role
-		const canCreateRequestedRole =
-			creatorRole === 'superadmin' && SUPERADMIN_REGISTERABLE_ROLES.has(requestedRole)
-
-		if (!canCreateRequestedRole) {
-			return fail(403, 'Forbidden: only superadmin can register employees')
-		}
-
 		if (req.body.location && !parsedLocation) {
 			return fail(
 				400,
@@ -425,18 +419,8 @@ exports.register = async (req, res) => {
 		const user = await User.create(userPayload)
 		createdUserId = user._id?.toString?.() || String(user._id || '')
 
-		const accessToken = generateAccessToken(user)
-		const refreshToken = generateRefreshToken(user)
-
-		user.refreshToken = refreshToken
-		await user.save({ validateBeforeSave: false })
-
-		const userResponse = await User.findById(user._id)
-
 		res.status(201).json({
-			accessToken,
-			refreshToken,
-			user: sanitizeUser(userResponse, req),
+			user: sanitizeUser(user, req),
 		})
 	} catch (error) {
 		if (error.code === 11000) {
@@ -462,6 +446,158 @@ exports.register = async (req, res) => {
 			removeUploadedFileIfAny(req)
 		}
 		res.status(500).json({ message: 'Internal server error' })
+	}
+}
+
+exports.updateUser = async (req, res) => {
+	const fail = (statusCode, message) => {
+		removeUploadedFileIfAny(req)
+		return res.status(statusCode).json({ message })
+	}
+
+	try {
+		const userId = req.params.userId
+
+		if (!mongoose.isValidObjectId(userId)) {
+			return fail(400, 'Invalid user id')
+		}
+
+		if (!req.user) {
+			return fail(401, 'Unauthorized')
+		}
+
+		if (req.user._id.toString() !== userId) {
+			return fail(403, 'You can only update your own profile')
+		}
+
+		const updatePayload = {}
+
+		if (typeof req.body.fullname !== 'undefined') {
+			const fullname = String(req.body.fullname || '').trim()
+			if (!fullname) {
+				return fail(400, 'fullname cannot be empty')
+			}
+			updatePayload.fullname = fullname
+		}
+
+		if (typeof req.body.phone !== 'undefined') {
+			const phone = String(req.body.phone || '').trim()
+			if (!PHONE_PATTERN.test(phone)) {
+				return fail(400, 'Invalid phone format')
+			}
+			updatePayload.phone = phone
+		}
+
+		if (typeof req.body.email !== 'undefined') {
+			const email = String(req.body.email || '')
+				.trim()
+				.toLowerCase()
+			if (!email) {
+				return fail(400, 'email cannot be empty')
+			}
+			updatePayload.email = email
+		}
+
+		if (typeof req.body.dateOfBirth !== 'undefined') {
+			const parsedDate = new Date(req.body.dateOfBirth)
+			if (Number.isNaN(parsedDate.getTime())) {
+				return fail(400, 'Invalid dateOfBirth value')
+			}
+			updatePayload.dateOfBirth = parsedDate
+		}
+
+		if (typeof req.body.gender !== 'undefined') {
+			const gender = String(req.body.gender || '')
+				.trim()
+				.toLowerCase()
+			if (!['male', 'female'].includes(gender)) {
+				return fail(400, 'Gender must be male or female')
+			}
+			updatePayload.gender = gender
+		}
+
+		if (typeof req.body.company !== 'undefined') {
+			const company = String(req.body.company || '').trim()
+			updatePayload.company = company || undefined
+		}
+
+		if (typeof req.body.location !== 'undefined') {
+			if (req.body.location === null || req.body.location === '') {
+				updatePayload.location = undefined
+			} else {
+				const parsedLocation = parseLocation(req.body.location)
+				if (!parsedLocation) {
+					return fail(
+						400,
+						'Invalid location. Expected JSON object with coordinates [longitude, latitude]',
+					)
+				}
+				updatePayload.location = parsedLocation
+			}
+		}
+
+		if (typeof req.body.password !== 'undefined') {
+			const password = String(req.body.password || '')
+			if (password.length < 8) {
+				return fail(400, 'Password must be at least 8 characters')
+			}
+			updatePayload.password = await bcrypt.hash(password, 12)
+		}
+
+		if (req.file) {
+			updatePayload.imgURL = `/uploads/${req.file.filename}`
+		}
+
+		const user = await User.findById(userId).select('+refreshToken')
+		if (!user) {
+			return fail(404, 'User not found')
+		}
+
+		const previousImgURL = user.imgURL
+
+		Object.assign(user, updatePayload)
+		await user.save()
+
+		if (
+			req.file &&
+			previousImgURL &&
+			previousImgURL !== user.imgURL &&
+			previousImgURL !== '/uploads/default-avatar.png'
+		) {
+			const previousPath = resolveLocalUploadPath(previousImgURL)
+			if (previousPath) {
+				try {
+					if (fs.existsSync(previousPath)) {
+						fs.unlinkSync(previousPath)
+					}
+				} catch (error) {
+					console.error('Failed to remove previous avatar:', error)
+				}
+			}
+		}
+
+		return res.status(200).json({
+			message: 'User updated successfully',
+			user: sanitizeUser(user, req),
+		})
+	} catch (error) {
+		if (error.code === 11000) {
+			const duplicateField = Object.keys(error.keyPattern || {})[0] || 'Field'
+			removeUploadedFileIfAny(req)
+			return res.status(409).json({ message: `${duplicateField} already exists` })
+		}
+
+		if (error.name === 'ValidationError') {
+			const firstErrorMessage = Object.values(error.errors || {})[0]?.message
+			removeUploadedFileIfAny(req)
+			return res
+				.status(400)
+				.json({ message: firstErrorMessage || 'Validation failed' })
+		}
+
+		console.error('Update user failed:', error)
+		removeUploadedFileIfAny(req)
+		return res.status(500).json({ message: 'Internal server error' })
 	}
 }
 
@@ -533,13 +669,33 @@ exports.me = async (req, res) => {
 
 exports.listUsers = async (req, res) => {
 	try {
-		const limit = Math.min(Number(req.query.limit) || 20, 100)
-		const users = await User.find({})
-			.sort({ createdAt: -1 })
-			.limit(limit)
+		const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100)
+		const page = Math.max(Number(req.query.page) || 1, 1)
+		const skip = (page - 1) * limit
+		const search = String(req.query.search || '').trim()
+		const role = String(req.query.role || '').trim().toLowerCase()
+
+		const query = {}
+		if (search) {
+			query.$or = [
+				{ fullname: { $regex: search, $options: 'i' } },
+				{ phone: { $regex: search, $options: 'i' } },
+				{ email: { $regex: search, $options: 'i' } },
+			]
+		}
+		if (role && ALLOWED_ROLES.has(role)) {
+			query.role = role
+		}
+
+		const [users, total] = await Promise.all([
+			User.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit),
+			User.countDocuments(query),
+		])
 
 		return res.status(200).json({
-			count: users.length,
+			page,
+			limit,
+			total,
 			users: users.map(user => sanitizeUser(user, req)),
 		})
 	} catch (error) {
