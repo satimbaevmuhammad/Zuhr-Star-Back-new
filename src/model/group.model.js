@@ -95,7 +95,7 @@ const groupSchema = new mongoose.Schema(
 		},
 		groupType: {
 			type: String,
-			enum: ['odd', 'even'],
+			enum: ['even', 'odd'],
 			default: 'odd',
 		},
 		lessons: {

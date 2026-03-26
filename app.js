@@ -11,6 +11,7 @@ const homeworkRoutes = require('./src/routes/homework.routes')
 const financeRoutes = require('./src/routes/finance.routes')
 const forbiddenRoutes = require('./src/routes/forbidden.routes')
 const extraLessonRoutes = require('./src/routes/extra-lesson.routes')
+const leadRoutes = require('./src/routes/lead.routes')
 const swaggerSpec = require('./src/config/swagger')
 
 const app = express()
@@ -84,6 +85,7 @@ app.use('/api/homework', homeworkRoutes)
 app.use('/api/finance', financeRoutes)
 app.use('/api/forbidden', forbiddenRoutes)
 app.use('/api/extra-lessons', extraLessonRoutes)
+app.use('/api/leads', leadRoutes)
 
 app.use((req, res) => {
 	res.status(404).json({ message: 'Route not found' })

@@ -17,7 +17,7 @@ const DAYS_OF_WEEK = [
 	'sunday',
 ]
 const GROUP_STATUSES = ['planned', 'active', 'paused', 'completed', 'archived']
-const GROUP_TYPES = ['odd', 'even']
+const GROUP_TYPES = ['even', 'odd']
 const ATTENDANCE_STATUSES = ['present', 'absent', 'late', 'excused']
 const STUDENT_GROUP_STATUSES = ['active', 'paused', 'completed', 'left']
 const PRIVILEGED_ATTENDANCE_ROLES = new Set(['superadmin', 'admin', 'headteacher'])
@@ -28,7 +28,7 @@ const GROUP_TYPE_DAY_MAP = Object.freeze({
 	even: ['tuesday', 'thursday', 'saturday'],
 })
 const GROUP_TYPE_SCHEDULE_MESSAGE =
-	'Invalid schedule for groupType: odd groups must be monday/wednesday/friday; even groups must be tuesday/thursday/saturday'
+	'schedule must have exactly 3 entries with valid startTime (HH:mm) and durationMinutes (30-300). Days are assigned automatically: odd → monday/wednesday/friday, even → tuesday/thursday/saturday'
 
 const parseDateValue = value => {
 	const date = new Date(value)
@@ -117,19 +117,31 @@ const parseSchedule = (input, { groupType } = {}) => {
 		return null
 	}
 
+	const expectedDays = groupType ? GROUP_TYPE_DAY_MAP[groupType] : null
+	const expanded =
+		expectedDays && parsed.length === 1
+			? expectedDays.map(() => parsed[0])
+			: parsed
+
+	if (expectedDays && expanded.length !== expectedDays.length) {
+		return null
+	}
+
 	const normalized = []
-	for (const item of parsed) {
+	for (let index = 0; index < expanded.length; index++) {
+		const item = expanded[index]
 		if (!item || typeof item !== 'object') {
 			return null
 		}
 
-		const dayOfWeek = String(item.dayOfWeek || '')
-			.trim()
-			.toLowerCase()
+		const dayOfWeek = expectedDays
+			? expectedDays[index]
+			: String(item.dayOfWeek || '').trim().toLowerCase()
+
 		const startTime = String(item.startTime || '').trim()
 		const durationMinutes = Number(item.durationMinutes)
 
-		if (!DAYS_OF_WEEK.includes(dayOfWeek)) {
+		if (!expectedDays && !DAYS_OF_WEEK.includes(dayOfWeek)) {
 			return null
 		}
 
@@ -141,20 +153,14 @@ const parseSchedule = (input, { groupType } = {}) => {
 			return null
 		}
 
-		normalized.push({
-			dayOfWeek,
-			startTime,
-			durationMinutes,
-		})
+		normalized.push({ dayOfWeek, startTime, durationMinutes })
 	}
 
-	const uniqueDays = new Set(normalized.map(item => item.dayOfWeek))
-	if (uniqueDays.size !== normalized.length) {
-		return null
-	}
-
-	if (groupType && !matchesGroupTypeSchedule({ schedule: normalized, groupType })) {
-		return null
+	if (!expectedDays) {
+		const uniqueDays = new Set(normalized.map(item => item.dayOfWeek))
+		if (uniqueDays.size !== normalized.length) {
+			return null
+		}
 	}
 
 	return normalized
@@ -572,7 +578,7 @@ exports.createGroup = async (req, res) => {
 		}
 
 		if (!GROUP_TYPES.includes(groupType)) {
-			return res.status(400).json({ message: 'groupType must be odd or even' })
+			return res.status(400).json({ message: 'groupType must be even or odd' })
 		}
 
 		if (!schedule || !matchesGroupTypeSchedule({ schedule, groupType })) {
@@ -840,7 +846,7 @@ exports.updateGroup = async (req, res) => {
 		if (!nextGroupType) {
 			return res.status(400).json({
 				message:
-					'groupType must be odd or even and schedule must match odd/even day pattern',
+					'groupType must be even or odd and schedule must match even/odd day pattern',
 			})
 		}
 
@@ -953,10 +959,15 @@ exports.updateGroup = async (req, res) => {
 			}
 			group.schedule = schedule
 		} else if (!matchesGroupTypeSchedule({ schedule: group.schedule, groupType: nextGroupType })) {
-			return res.status(400).json({
-				message:
-					'Current schedule does not match selected groupType. Update schedule to match groupType days',
-			})
+			const expectedDays = GROUP_TYPE_DAY_MAP[nextGroupType]
+			if (!expectedDays || group.schedule.length !== expectedDays.length) {
+				return res.status(400).json({ message: GROUP_TYPE_SCHEDULE_MESSAGE })
+			}
+			group.schedule = group.schedule.map((item, index) => ({
+				dayOfWeek: expectedDays[index],
+				startTime: item.startTime,
+				durationMinutes: item.durationMinutes,
+			}))
 		}
 
 		if (typeof req.body.room !== 'undefined') {

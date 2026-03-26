@@ -332,6 +332,67 @@ router.patch(
 /**
  * @swagger
  * /api/auth/users/{userId}:
+ *   patch:
+ *     tags: [Auth]
+ *     summary: Update user profile
+ *     description: Authenticated users can only update their own profile.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               fullname:
+ *                 type: string
+ *               phone:
+ *                 type: string
+ *               email:
+ *                 type: string
+ *               dateOfBirth:
+ *                 type: string
+ *               gender:
+ *                 type: string
+ *                 enum: [male, female]
+ *               company:
+ *                 type: string
+ *               location:
+ *                 type: string
+ *               password:
+ *                 type: string
+ *                 minLength: 8
+ *               avatar:
+ *                 type: string
+ *                 format: binary
+ *     responses:
+ *       200:
+ *         description: User updated successfully
+ *       400:
+ *         description: Validation error
+ *       403:
+ *         description: Forbidden
+ *       404:
+ *         description: User not found
+ *       409:
+ *         description: Duplicate phone or email
+ */
+router.patch(
+	'/users/:userId',
+	uploadAvatar,
+	requireAuth,
+	authController.updateUser,
+)
+
+/**
+ * @swagger
+ * /api/auth/users/{userId}:
  *   delete:
  *     tags: [Auth]
  *     summary: Delete user

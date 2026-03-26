@@ -47,7 +47,7 @@ exports.getEmployeeFinanceSummary = async (req, res) => {
 		}
 
 		const employee = await User.findById(employeeId).select(
-			'fullname phone role financeBalance forbidens',
+			'fullname phone role financeBalance forbidens salary',
 		)
 		if (!employee) {
 			return res.status(404).json({ message: 'Employee not found' })
@@ -76,6 +76,7 @@ exports.getEmployeeFinanceSummary = async (req, res) => {
 				role: employee.role,
 				financeBalance: employee.financeBalance,
 				forbidens: employee.forbidens,
+				salary: employee.salary,
 			},
 			summary: {
 				totalBonuses,
@@ -85,6 +86,48 @@ exports.getEmployeeFinanceSummary = async (req, res) => {
 		})
 	} catch (error) {
 		console.error('Get employee finance summary failed:', error)
+		return res.status(500).json({ message: 'Internal server error' })
+	}
+}
+
+exports.updateEmployeeSalary = async (req, res) => {
+	try {
+		const { employeeId } = req.params
+		if (!mongoose.isValidObjectId(employeeId)) {
+			return res.status(400).json({ message: 'Invalid employee id' })
+		}
+
+		const salary = Number(req.body.salary)
+		if (!Number.isFinite(salary) || salary < 0) {
+			return res.status(400).json({ message: 'salary must be a non-negative number' })
+		}
+
+		const employee = await User.findById(employeeId)
+		if (!employee) {
+			return res.status(404).json({ message: 'Employee not found' })
+		}
+
+		employee.salary = salary
+		await employee.save()
+
+		return res.status(200).json({
+			message: 'Salary updated successfully',
+			employee: {
+				_id: employee._id,
+				fullname: employee.fullname,
+				phone: employee.phone,
+				role: employee.role,
+				salary: employee.salary,
+				financeBalance: employee.financeBalance,
+			},
+		})
+	} catch (error) {
+		if (error.name === 'ValidationError') {
+			const msg = Object.values(error.errors || {})[0]?.message
+			return res.status(400).json({ message: msg || 'Validation failed' })
+		}
+
+		console.error('Update employee salary failed:', error)
 		return res.status(500).json({ message: 'Internal server error' })
 	}
 }

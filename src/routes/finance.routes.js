@@ -97,6 +97,47 @@ router.get(
 
 /**
  * @swagger
+ * /api/finance/employees/{employeeId}/salary:
+ *   patch:
+ *     tags: [Finance]
+ *     summary: Set base salary for an employee
+ *     description: Sets the employee's base salary value directly (not a bonus/fine).
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: employeeId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [salary]
+ *             properties:
+ *               salary:
+ *                 type: number
+ *                 minimum: 0
+ *                 example: 3000000
+ *     responses:
+ *       200:
+ *         description: Salary updated
+ *       400:
+ *         description: Validation failed
+ *       404:
+ *         description: Employee not found
+ */
+router.patch(
+	'/employees/:employeeId/salary',
+	allowRoles('admin', 'superadmin'),
+	financeController.updateEmployeeSalary,
+)
+
+/**
+ * @swagger
  * /api/finance/employees/{employeeId}/bonus:
  *   post:
  *     tags: [Finance]

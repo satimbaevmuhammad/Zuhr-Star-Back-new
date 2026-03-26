@@ -76,6 +76,8 @@ const options = {
 						company: { type: 'string', example: 'OpenAI' },
 						imgURL: { type: 'string', example: '/uploads/avatar.png' },
 						faceIdEnabled: { type: 'boolean', example: false },
+						financeBalance: { type: 'number', example: 150000 },
+						salary: { type: 'number', example: 3000000 },
 						createdAt: { type: 'string', format: 'date-time' },
 						updatedAt: { type: 'string', format: 'date-time' },
 					},
@@ -358,10 +360,10 @@ const options = {
 						},
 						groupType: {
 							type: 'string',
-							enum: ['odd', 'even'],
-							example: 'odd',
+							enum: ['even', 'odd'],
+							example: 'even',
 							description:
-								'odd => monday/wednesday/friday, even => tuesday/thursday/saturday',
+								'even => tuesday/thursday/saturday, odd => monday/wednesday/friday',
 						},
 						level: { type: 'string', example: 'A1' },
 						teacher: { type: 'string', example: '65f12ca7a7720c194de6a095' },
@@ -384,6 +386,8 @@ const options = {
 						endDate: { type: 'string', format: 'date-time', nullable: true },
 						schedule: {
 							type: 'array',
+							description:
+								'If a single schedule item is provided, its time/duration are applied to all groupType days automatically.',
 							items: { $ref: '#/components/schemas/GroupScheduleInput' },
 						},
 						room: { type: 'string', example: 'Room 204' },
@@ -397,7 +401,7 @@ const options = {
 						name: { type: 'string' },
 						course: { type: 'string' },
 						courseId: { type: 'string' },
-						groupType: { type: 'string', enum: ['odd', 'even'] },
+						groupType: { type: 'string', enum: ['even', 'odd'] },
 						level: { type: 'string' },
 						teacher: { type: 'string' },
 						supportTeachers: {
@@ -413,6 +417,8 @@ const options = {
 						endDate: { type: 'string', format: 'date-time', nullable: true },
 						schedule: {
 							type: 'array',
+							description:
+								'If a single schedule item is provided, its time/duration are applied to all groupType days automatically.',
 							items: { $ref: '#/components/schemas/GroupScheduleInput' },
 						},
 						room: { type: 'string' },
@@ -426,7 +432,7 @@ const options = {
 						_id: { type: 'string', example: '65f12ca7a7720c194de6a011' },
 						name: { type: 'string', example: 'IELTS A1 - Morning' },
 						course: { type: 'string', example: 'IELTS Foundation' },
-						groupType: { type: 'string', enum: ['odd', 'even'], example: 'odd' },
+						groupType: { type: 'string', enum: ['even', 'odd'], example: 'even' },
 						courseRef: {
 							oneOf: [
 								{ type: 'string' },
