@@ -1,10 +1,12 @@
 const mongoose = require('mongoose')
 const ForbiddenRule = require('../model/forbidden-rule.model')
 const EmployeeViolation = require('../model/employee-violation.model')
-const EmployeeFinance = require('../model/employee-finance.model')
 const User = require('../model/user.model')
+const { FinancialEvent } = require('../models/FinancialEvent.model')
 
-// ─── FORBIDDEN RULES ─────────────────────────────────────────────────────────
+// -------------------------------------------------------------------------------
+// FORBIDDEN RULES
+// -------------------------------------------------------------------------------
 
 exports.listRules = async (req, res) => {
 	try {
@@ -12,7 +14,12 @@ exports.listRules = async (req, res) => {
 			.sort({ createdAt: -1 })
 			.populate('createdBy', 'fullname role')
 
-		return res.status(200).json({ rules })
+		return res.status(200).json({
+			page: 1,
+			limit: rules.length,
+			total: rules.length,
+			data: rules,
+		})
 	} catch (error) {
 		console.error('List forbidden rules failed:', error)
 		return res.status(500).json({ message: 'Internal server error' })
@@ -37,7 +44,7 @@ exports.createRule = async (req, res) => {
 			name,
 			description,
 			defaultFineAmount,
-			createdBy: req.user._id,
+			createdBy: req.user.id,
 		})
 
 		return res.status(201).json({ message: 'Forbidden rule created', rule })
@@ -85,7 +92,6 @@ exports.updateRule = async (req, res) => {
 		}
 
 		await rule.save()
-
 		return res.status(200).json({ message: 'Rule updated', rule })
 	} catch (error) {
 		if (error.code === 11000) {
@@ -119,7 +125,9 @@ exports.deleteRule = async (req, res) => {
 	}
 }
 
-// ─── EMPLOYEE VIOLATIONS ─────────────────────────────────────────────────────
+// -------------------------------------------------------------------------------
+// EMPLOYEE VIOLATIONS
+// -------------------------------------------------------------------------------
 
 exports.listViolations = async (req, res) => {
 	try {
@@ -152,7 +160,7 @@ exports.listViolations = async (req, res) => {
 			EmployeeViolation.countDocuments(query),
 		])
 
-		return res.status(200).json({ page, limit, total, violations })
+		return res.status(200).json({ page, limit, total, data: violations })
 	} catch (error) {
 		console.error('List violations failed:', error)
 		return res.status(500).json({ message: 'Internal server error' })
@@ -164,9 +172,8 @@ exports.recordViolation = async (req, res) => {
 		const employeeId = String(req.body.employeeId || '').trim()
 		const ruleId = String(req.body.ruleId || '').trim()
 		const note = req.body.note ? String(req.body.note).trim() : undefined
-		const fineOverride = typeof req.body.fineAmount !== 'undefined'
-			? Number(req.body.fineAmount)
-			: undefined
+		const fineOverride =
+			typeof req.body.fineAmount !== 'undefined' ? Number(req.body.fineAmount) : undefined
 
 		if (!employeeId || !ruleId) {
 			return res.status(400).json({ message: 'employeeId and ruleId are required' })
@@ -197,16 +204,14 @@ exports.recordViolation = async (req, res) => {
 
 		const fineAmount = typeof fineOverride !== 'undefined' ? fineOverride : rule.defaultFineAmount
 
-		// Create violation record
 		const violation = await EmployeeViolation.create({
 			employee: employeeId,
 			rule: ruleId,
 			fineAmount,
 			note,
-			recordedBy: req.user._id,
+			recordedBy: req.user.id,
 		})
 
-		// Auto-push to employee's forbidens array
 		employee.forbidens.push({
 			rule: ruleId,
 			violationId: violation._id,
@@ -215,21 +220,18 @@ exports.recordViolation = async (req, res) => {
 			note,
 			recordedAt: violation.createdAt,
 		})
+		await employee.save()
 
-		// If there's a fine amount, create a finance transaction and update balance
 		if (fineAmount > 0) {
-			await EmployeeFinance.create({
-				employee: employeeId,
+			await FinancialEvent.create({
+				userId: employeeId,
 				type: 'fine',
 				amount: fineAmount,
-				reason: `Violation: ${rule.name}${note ? ` — ${note}` : ''}`,
-				relatedViolation: violation._id,
-				recordedBy: req.user._id,
+				note: `Violation: ${rule.name}${note ? ` - ${note}` : ''}`,
+				createdBy: req.user.id,
+				relatedViolationId: violation._id,
 			})
-			employee.financeBalance -= fineAmount
 		}
-
-		await employee.save()
 
 		const populated = await EmployeeViolation.findById(violation._id)
 			.populate('employee', 'fullname phone role')
@@ -263,23 +265,23 @@ exports.deleteViolation = async (req, res) => {
 			return res.status(404).json({ message: 'Violation not found' })
 		}
 
-		// Remove from employee's forbidens array
 		await User.updateOne(
 			{ _id: violation.employee },
 			{ $pull: { forbidens: { violationId: violation._id } } },
 		)
 
-		// Reverse the fine if applicable
 		if (violation.fineAmount > 0) {
-			await User.updateOne(
-				{ _id: violation.employee },
-				{ $inc: { financeBalance: violation.fineAmount } },
-			)
-			// Remove the linked finance transaction
-			await EmployeeFinance.deleteOne({ relatedViolation: violation._id })
+			await FinancialEvent.create({
+				userId: violation.employee,
+				type: 'fine',
+				amount: -Math.abs(Number(violation.fineAmount) || 0),
+				note: 'Violation reversal',
+				createdBy: req.user.id,
+				relatedViolationId: violation._id,
+			})
 		}
 
-		return res.status(200).json({ message: 'Violation deleted and fine reversed' })
+		return res.status(200).json({ message: 'Violation deleted and fine reversal appended' })
 	} catch (error) {
 		console.error('Delete violation failed:', error)
 		return res.status(500).json({ message: 'Internal server error' })

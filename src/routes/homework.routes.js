@@ -3,6 +3,7 @@ const express = require('express')
 const homeworkController = require('../controllers/homework.controller')
 const { requireAuth, requireStudentAuth } = require('../middleware/auth.middleware')
 const { uploadHomeworkAttachment } = require('../middleware/upload.middleware')
+const validateObjectId = require('../middleware/validateObjectId')
 
 const router = express.Router()
 
@@ -34,7 +35,12 @@ const router = express.Router()
  *       404:
  *         description: Lesson not found
  */
-router.get('/lessons/:lessonId', requireStudentAuth, homeworkController.getStudentHomework)
+router.get(
+	'/lessons/:lessonId',
+	requireStudentAuth,
+	validateObjectId('lessonId'),
+	homeworkController.getStudentHomework,
+)
 
 /**
  * @swagger
@@ -80,6 +86,7 @@ router.get('/lessons/:lessonId', requireStudentAuth, homeworkController.getStude
 router.post(
 	'/lessons/:lessonId/submissions',
 	requireStudentAuth,
+	validateObjectId('lessonId'),
 	uploadHomeworkAttachment,
 	homeworkController.submitStudentHomework,
 )
@@ -164,6 +171,11 @@ router.get('/submissions', requireAuth, homeworkController.listHomeworkSubmissio
  *       404:
  *         description: Submission not found
  */
-router.patch('/submissions/:submissionId/grade', requireAuth, homeworkController.gradeHomeworkSubmission)
+router.patch(
+	'/submissions/:submissionId/grade',
+	requireAuth,
+	validateObjectId('submissionId'),
+	homeworkController.gradeHomeworkSubmission,
+)
 
 module.exports = router

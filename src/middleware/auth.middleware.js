@@ -2,36 +2,13 @@ const fs = require('fs')
 
 const User = require('../model/user.model')
 const Student = require('../model/student.model')
+const Role = require('../models/Role.model')
 const { verifyAccessToken } = require('../utils/token')
 
-const ROLE_PERMISSIONS = Object.freeze({
-	teacher: ['profile:read', 'students:read', 'groups:read'],
-	supporteacher: ['profile:read', 'students:read', 'groups:read'],
-	headteacher: [
-		'profile:read',
-		'users:read',
-		'students:read',
-		'students:manage',
-		'groups:read',
-		'groups:manage',
-	],
-	admin: [
-		'profile:read',
-		'users:read',
-		'users:manage',
-		'users:manage_roles',
-		'students:read',
-		'students:manage',
-		'groups:read',
-		'groups:manage',
-	],
-	superadmin: ['*'],
-})
+const ROLE_CACHE_TTL_MS = 60 * 1000
 
-const hasPermission = (role, permission) => {
-	const permissions = ROLE_PERMISSIONS[role] || []
-	return permissions.includes('*') || permissions.includes(permission)
-}
+let rolePermissionCache = new Map()
+let rolePermissionCacheExpiresAt = 0
 
 const extractBearerToken = authHeader => {
 	if (typeof authHeader !== 'string') {
@@ -47,80 +24,153 @@ const extractBearerToken = authHeader => {
 	return token || null
 }
 
+const normalizeRoleInput = value => {
+	const normalized = String(value || '').trim()
+	const lowered = normalized.toLowerCase()
+	if (lowered === 'supporteacher' || lowered === 'supportteacher') {
+		return 'supportTeacher'
+	}
+
+	return lowered
+}
+
 const canCreateRoleViaRegister = (actorRole, targetRole) => {
 	if (targetRole === 'superadmin') {
 		return false
 	}
 
-	return actorRole === 'superadmin' && ['teacher', 'supporteacher', 'headteacher', 'admin'].includes(targetRole)
+	return actorRole === 'superadmin' && ['teacher', 'supportTeacher', 'headteacher', 'admin'].includes(targetRole)
+}
+
+const buildRequestIdentity = payload => {
+	const id = String(payload.sub || payload.id || '').trim()
+	return {
+		id,
+		// Kept for backward compatibility with existing controller code paths.
+		_id: id,
+		role: String(payload.role || '').trim(),
+		userType: String(payload.userType || '').trim(),
+	}
+}
+
+const invalidateRolePermissionsCache = () => {
+	rolePermissionCache = new Map()
+	rolePermissionCacheExpiresAt = 0
+}
+
+const loadRolePermissionsMap = async () => {
+	const now = Date.now()
+	if (rolePermissionCache.size > 0 && now < rolePermissionCacheExpiresAt) {
+		return rolePermissionCache
+	}
+
+	const roles = await Role.find().select('name permissions')
+	const nextCache = new Map()
+	for (const roleDocument of roles) {
+		nextCache.set(
+			String(roleDocument.name || '').trim(),
+			Array.isArray(roleDocument.permissions) ? roleDocument.permissions : [],
+		)
+	}
+
+	rolePermissionCache = nextCache
+	rolePermissionCacheExpiresAt = now + ROLE_CACHE_TTL_MS
+	return rolePermissionCache
+}
+
+const hasPermission = async (role, permission) => {
+	if (role === 'superadmin') {
+		return true
+	}
+
+	const roleMap = await loadRolePermissionsMap()
+	const permissions = roleMap.get(role) || []
+	return permissions.includes('*') || permissions.includes(permission)
+}
+
+const verifyToken = async (req, res, next) => {
+	try {
+		const token = extractBearerToken(req.headers.authorization)
+		if (!token) {
+			return res.status(401).json({ message: 'Authorization token missing' })
+		}
+
+		const payload = verifyAccessToken(token)
+		req.user = buildRequestIdentity(payload)
+		return next()
+	} catch (error) {
+		return res.status(401).json({ message: 'Invalid or expired access token' })
+	}
 }
 
 const requireAuth = async (req, res, next) => {
-	try {
-		const token = extractBearerToken(req.headers.authorization)
-		if (!token) {
-			return res.status(401).json({ message: 'Authorization token missing' })
+	return verifyToken(req, res, async () => {
+		try {
+			if (req.user.userType !== 'employee') {
+				return res.status(401).json({ message: 'Invalid employee token' })
+			}
+
+			const userDocument = await User.findById(req.user.id).select('+refreshToken')
+			if (!userDocument) {
+				return res.status(401).json({ message: 'Invalid token user' })
+			}
+
+			req.userDocument = userDocument
+			req.user.role = userDocument.role
+			return next()
+		} catch (error) {
+			return res.status(401).json({ message: 'Invalid or expired access token' })
 		}
-
-		const payload = verifyAccessToken(token)
-		const user = await User.findById(payload.id).select('+refreshToken')
-
-		if (!user) {
-			return res.status(401).json({ message: 'Invalid token user' })
-		}
-
-		req.user = user
-		next()
-	} catch (error) {
-		return res.status(401).json({ message: 'Invalid or expired access token' })
-	}
+	})
 }
 
 const requireStudentAuth = async (req, res, next) => {
-	try {
-		const token = extractBearerToken(req.headers.authorization)
-		if (!token) {
-			return res.status(401).json({ message: 'Authorization token missing' })
-		}
+	return verifyToken(req, res, async () => {
+		try {
+			if (req.user.userType !== 'student') {
+				return res.status(401).json({ message: 'Invalid student token' })
+			}
 
-		const payload = verifyAccessToken(token)
-		if (payload?.type !== 'student') {
-			return res.status(401).json({ message: 'Invalid student token' })
-		}
+			const student = await Student.findById(req.user.id)
+			if (!student) {
+				return res.status(401).json({ message: 'Invalid token student' })
+			}
 
-		const student = await Student.findById(payload.id)
-		if (!student) {
-			return res.status(401).json({ message: 'Invalid token student' })
+			req.student = student
+			return next()
+		} catch (error) {
+			return res.status(401).json({ message: 'Invalid or expired access token' })
 		}
-
-		req.student = student
-		next()
-	} catch (error) {
-		return res.status(401).json({ message: 'Invalid or expired access token' })
-	}
+	})
 }
 
 const allowRoles = (...roles) => {
 	return (req, res, next) => {
-		if (!req.user || !roles.includes(req.user.role)) {
+		if (!req.user || req.user.userType !== 'employee' || !roles.includes(req.user.role)) {
 			return res.status(403).json({ message: 'Forbidden: insufficient role' })
 		}
-		next()
+		return next()
 	}
 }
 
 const allowPermissions = (...permissions) => {
-	return (req, res, next) => {
-		if (!req.user) {
+	return async (req, res, next) => {
+		if (!req.user || req.user.userType !== 'employee') {
 			return res.status(401).json({ message: 'Unauthorized' })
 		}
 
-		const allowed = permissions.every(permission => hasPermission(req.user.role, permission))
-		if (!allowed) {
-			return res.status(403).json({ message: 'Forbidden: insufficient permissions' })
-		}
+		try {
+			for (const permission of permissions) {
+				const allowed = await hasPermission(req.user.role, permission)
+				if (!allowed) {
+					return res.status(403).json({ message: 'Forbidden: insufficient permissions' })
+				}
+			}
 
-		next()
+			return next()
+		} catch (error) {
+			return res.status(500).json({ message: 'Failed to load role permissions' })
+		}
 	}
 }
 
@@ -139,9 +189,7 @@ const removeUploadedFileIfAny = req => {
 }
 
 const requireRegisterPermission = (req, res, next) => {
-	const requestedRole = String(req.body.role || 'teacher')
-		.trim()
-		.toLowerCase()
+	const requestedRole = normalizeRoleInput(req.body.role || 'teacher')
 
 	const token = extractBearerToken(req.headers.authorization)
 	if (!token) {
@@ -152,13 +200,22 @@ const requireRegisterPermission = (req, res, next) => {
 	return Promise.resolve()
 		.then(async () => {
 			const payload = verifyAccessToken(token)
-			const user = await User.findById(payload.id).select('+refreshToken')
+			const identity = buildRequestIdentity(payload)
+			if (identity.userType !== 'employee') {
+				removeUploadedFileIfAny(req)
+				return res.status(401).json({ message: 'Invalid token user' })
+			}
+
+			const user = await User.findById(identity.id).select('+refreshToken')
 			if (!user) {
 				removeUploadedFileIfAny(req)
 				return res.status(401).json({ message: 'Invalid token user' })
 			}
 
-			req.user = user
+			req.user = identity
+			req.user.role = user.role
+			req.userDocument = user
+
 			const canCreate = canCreateRoleViaRegister(user.role, requestedRole)
 			if (!canCreate) {
 				removeUploadedFileIfAny(req)
@@ -176,13 +233,15 @@ const requireRegisterPermission = (req, res, next) => {
 }
 
 module.exports = {
-	ROLE_PERMISSIONS,
+	ROLE_CACHE_TTL_MS,
 	hasPermission,
 	canCreateRoleViaRegister,
 	extractBearerToken,
+	verifyToken,
 	requireAuth,
 	requireStudentAuth,
 	allowRoles,
 	allowPermissions,
 	requireRegisterPermission,
+	invalidateRolePermissionsCache,
 }

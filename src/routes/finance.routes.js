@@ -1,6 +1,7 @@
 const express = require('express')
 const financeController = require('../controllers/finance.controller')
 const { requireAuth, allowPermissions, allowRoles } = require('../middleware/auth.middleware')
+const validateObjectId = require('../middleware/validateObjectId')
 
 const router = express.Router()
 
@@ -47,7 +48,8 @@ router.get('/transactions', allowPermissions('users:read'), financeController.li
  * /api/finance/transactions/{transactionId}:
  *   delete:
  *     tags: [Finance]
- *     summary: Delete a finance transaction and reverse the balance effect
+ *     summary: Attempt to delete a finance transaction (transactions are immutable)
+ *     description: Finance transactions are append-only and cannot be deleted. This endpoint always returns 405. Violation-linked transactions must be managed via DELETE /api/forbidden/violations/{violationId}.
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -57,16 +59,55 @@ router.get('/transactions', allowPermissions('users:read'), financeController.li
  *         schema:
  *           type: string
  *     responses:
- *       200:
- *         description: Transaction deleted
+ *       405:
+ *         description: Transactions are immutable and cannot be deleted
  *       404:
  *         description: Transaction not found
+ *       409:
+ *         description: Transaction is linked to a violation
  */
 router.delete(
 	'/transactions/:transactionId',
 	allowRoles('admin', 'superadmin'),
+	validateObjectId('transactionId'),
 	financeController.deleteTransaction,
 )
+
+/**
+ * @swagger
+ * /api/finance/employees:
+ *   get:
+ *     tags: [Finance]
+ *     summary: List employees with finance info
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           default: 1
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           default: 20
+ *       - in: query
+ *         name: search
+ *         schema:
+ *           type: string
+ *         description: Search by fullname, phone, or email
+ *       - in: query
+ *         name: role
+ *         schema:
+ *           type: string
+ *           enum: [teacher, supportTeacher, headteacher, admin, superadmin]
+ *         description: Filter by role
+ *     responses:
+ *       200:
+ *         description: Paginated employee list
+ */
+router.get('/employees', allowPermissions('users:read'), financeController.listEmployees)
 
 /**
  * @swagger
@@ -92,6 +133,7 @@ router.delete(
 router.get(
 	'/employees/:employeeId',
 	allowPermissions('users:read'),
+	validateObjectId('employeeId'),
 	financeController.getEmployeeFinanceSummary,
 )
 
@@ -133,6 +175,7 @@ router.get(
 router.patch(
 	'/employees/:employeeId/salary',
 	allowRoles('admin', 'superadmin'),
+	validateObjectId('employeeId'),
 	financeController.updateEmployeeSalary,
 )
 
@@ -177,6 +220,7 @@ router.patch(
 router.post(
 	'/employees/:employeeId/bonus',
 	allowRoles('admin', 'superadmin', 'headteacher'),
+	validateObjectId('employeeId'),
 	financeController.addBonus,
 )
 
@@ -221,6 +265,7 @@ router.post(
 router.post(
 	'/employees/:employeeId/fine',
 	allowRoles('admin', 'superadmin', 'headteacher'),
+	validateObjectId('employeeId'),
 	financeController.addFine,
 )
 

@@ -1,6 +1,7 @@
 const express = require('express')
 const leadController = require('../controllers/lead.controller')
 const { requireAuth } = require('../middleware/auth.middleware')
+const validateObjectId = require('../middleware/validateObjectId')
 
 const router = express.Router()
 
@@ -152,8 +153,8 @@ router.post('/', requireAuth, leadController.createLead)
  *       404:
  *         description: Not found
  */
-router.get('/:leadId', requireAuth, leadController.getLead)
-router.patch('/:leadId', requireAuth, leadController.updateLead)
-router.delete('/:leadId', requireAuth, leadController.deleteLead)
+router.get('/:leadId', requireAuth, validateObjectId('leadId'), leadController.getLead)
+router.patch('/:leadId', requireAuth, validateObjectId('leadId'), leadController.updateLead)
+router.delete('/:leadId', requireAuth, validateObjectId('leadId'), leadController.deleteLead)
 
 module.exports = router

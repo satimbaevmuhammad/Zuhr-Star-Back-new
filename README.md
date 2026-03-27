@@ -1,483 +1,407 @@
-# BackZuhr — Backend API Documentation
+# BackZuhr — Backend API
 
-> Express.js + MongoDB ta'lim markazi boshqaruv tizimi
-> Deployed: https://zuhr-star-back-new-production.up.railway.app
-> Local port: `3000`
+REST API для CRM + LMS учебного центра. Node.js + Express + MongoDB.
 
 ---
 
-## Texnologiyalar
+## Содержание
 
-| Texnologiya | Versiya | Maqsad |
+1. [Технологии](#1-технологии)
+2. [Быстрый старт](#2-быстрый-старт)
+3. [Переменные окружения](#3-переменные-окружения)
+4. [Архитектура проекта](#4-архитектура-проекта)
+5. [API маршруты](#5-api-маршруты)
+6. [Структура папок](#6-структура-папок)
+7. [Ключевые решения](#7-ключевые-решения)
+
+---
+
+## 1. Технологии
+
+| Пакет | Версия | Назначение |
 |---|---|---|
-| Express.js | v5.2.1 | Asosiy framework |
-| MongoDB + Mongoose | v9.1.5 | Ma'lumotlar bazasi |
-| JWT (jsonwebtoken) | v9.0.3 | Access + Refresh tokenlar |
-| bcrypt | v6.0.0 | Parolni shifrlash (12 round) |
-| Multer | v2.0.2 | Fayl yuklash |
-| Swagger/OpenAPI | 3.0.3 | API dokumentatsiya |
-| Firebase Admin SDK | v13.6.1 | O'rnatilgan (hozircha ishlatilmagan) |
+| `express` | 5 | HTTP-фреймворк |
+| `mongoose` | 9 | ODM для MongoDB |
+| `jsonwebtoken` | — | JWT-токены |
+| `bcrypt` | — | Хэширование паролей |
+| `multer` | — | Загрузка файлов (аватары) |
+| `cors` | — | CORS-политика |
+| `swagger-jsdoc` + `swagger-ui-express` | — | Автодокументация API |
+| `face-api.js` | — | Распознавание лиц (Face ID) |
 
 ---
 
-## Loyiha strukturasi
+## 2. Быстрый старт
 
+```bash
+npm install
+cp .env.example .env   # заполни переменные
+node index.js
 ```
-BackZuhr/
-├── app.js                          # Express app konfiguratsiyasi
-├── index.js                        # Server ishga tushirish
-├── package.json
-├── .env                            # Muhit o'zgaruvchilari
-│
-├── src/
-│   ├── config/
-│   │   ├── db.js                   # MongoDB ulanish
-│   │   └── swagger.js              # OpenAPI spesifikatsiya
-│   │
-│   ├── middleware/
-│   │   ├── auth.middleware.js      # JWT, rol asosida ruxsat
-│   │   └── upload.middleware.js    # Multer fayl yuklash
-│   │
-│   ├── model/
-│   │   ├── user.model.js           # O'qituvchi/admin modeli
-│   │   ├── student.model.js        # Talaba modeli
-│   │   ├── group.model.js          # Guruh modeli
-│   │   ├── course.model.js         # Kurs modeli
-│   │   ├── lesson.model.js         # Dars modeli
-│   │   ├── homework-submission.model.js  # Uyga vazifa topshirish
-│   │   └── finance.model.js        # Moliya (hozircha bo'sh)
-│   │
-│   ├── controllers/
-│   │   ├── auth.controller.js      # Autentifikatsiya, Face ID
-│   │   ├── student.controller.js   # Talaba CRUD
-│   │   ├── group.controller.js     # Guruh CRUD, davomat
-│   │   ├── course.controller.js    # Kurs, dars
-│   │   └── homework.controller.js  # Uyga vazifa
-│   │
-│   ├── routes/
-│   │   ├── auth.routes.js          # /api/auth/*
-│   │   ├── student.routes.js       # /api/students/*
-│   │   ├── group.routes.js         # /api/groups/*
-│   │   ├── course.routes.js        # /api/courses/*
-│   │   └── homework.routes.js      # /api/homework/*
-│   │
-│   ├── services/
-│   │   ├── course-sync.service.js          # Kurs guruh sonini sinxronlash
-│   │   └── student-balance-reset.service.js # Talaba balansini reset qilish
-│   │
-│   └── utils/
-│       ├── token.js                # JWT yaratish/tekshirish
-│       └── public-url.js           # URL yasash yordamchisi
-│
-├── scripts/
-│   ├── smoke.test.js               # Asosiy testlar
-│   └── senior.test.js              # Kengaytirilgan testlar (31 ta)
-│
-└── uploads/                        # Fayllar saqlanadigan joy
-```
+
+Полезные URL после старта:
+- `GET /health` — проверка работоспособности
+- `GET /api-docs` — Swagger UI
+- `GET /api-docs-json` — OpenAPI JSON
+
+При первом подключении к MongoDB автоматически запускается `roles.seeder.js` — создаёт дефолтные роли с правами если они ещё не существуют.
 
 ---
 
-## Muhit o'zgaruvchilari (.env)
+## 3. Переменные окружения
 
 ```env
-# Ma'lumotlar bazasi
-MONGO_URI=mongodb+srv://user:password@cluster.mongodb.net/database
+# База данных
+MONGO_URI=mongodb://localhost:27017/backzuhr
 
-# JWT
-JWT_SECRET=<secret-kalit>
-JWT_ACCESS_SECRET=<ixtiyoriy>
-JWT_REFRESH_SECRET=<ixtiyoriy>
-
-# Server
+# Сервер
 PORT=3000
 
-# CORS
-CORS_ORIGINS=http://localhost:3000,https://yourdomain.com
+# JWT — нужен хотя бы один из вариантов
+JWT_SECRET=your_secret_here
+# Устаревшие алиасы (используются если JWT_SECRET не задан):
+JWT_ACCESS_SECRET=
+JWT_REFRESH_SECRET=
+
+# CORS — список разрешённых origin через запятую. Пусто или * = разрешить всё.
+CORS_ORIGINS=http://localhost:5173,https://app.school.uz
 
 # Face ID
-FACE_MATCH_THRESHOLD=0.45           # Masofa chegarasi
-FACE_LOGIN_MAX_CANDIDATES=2000      # Qidiruvdagi max foydalanuvchi
+FACE_MATCH_THRESHOLD=0.45          # порог схожести (0–1, ниже = строже)
+FACE_LOGIN_MAX_CANDIDATES=2000     # максимум кандидатов при поиске
 
-# Balans reset
-STUDENT_BALANCE_RESET_INTERVAL_MS=3600000    # 1 soat
-STUDENT_BALANCE_RESET_MIN_GAP_MS=300000      # 5 daqiqa
+# Автоматический сброс баланса студентов
+STUDENT_BALANCE_RESET_INTERVAL_MS=3600000   # интервал проверки (1 час)
+STUDENT_BALANCE_RESET_MIN_GAP_MS=300000     # минимальный промежуток между сбросами (5 мин)
 
-# Fayl URL
-PUBLIC_BASE_URL=https://yourdomain.com
-BASE_URL=https://yourdomain.com
+# Публичный URL сервера (используется в ссылках на файлы)
+PUBLIC_BASE_URL=https://your-domain.com
+BASE_URL=https://your-domain.com
 ```
 
 ---
 
-## Rollar va ruxsatlar
+## 4. Архитектура проекта
 
-| Rol | Ruxsatlar |
+### 4.1 Две отдельные сущности аккаунтов
+
+В системе два типа пользователей с разными коллекциями и токенами:
+
+| | Сотрудник (`User`) | Студент (`Student`) |
+|---|---|---|
+| Коллекция | `users` | `students` |
+| Логин | `POST /api/auth/login` | `POST /api/students/login` |
+| `userType` в JWT | `employee` | `student` |
+| Refresh токен | Есть (7 дней) | Нет |
+| Роли | teacher, supportTeacher, headteacher, admin, superadmin | Нет |
+
+### 4.2 JWT
+
+Алгоритм: `HS256`. Payload: `{ sub, role, userType, iat, exp }`.
+
+| Токен | TTL |
 |---|---|
-| `superadmin` | Hammasi (`*`) |
-| `admin` | Foydalanuvchi, talaba, guruh boshqaruvi |
-| `headteacher` | Talaba/guruh boshqaruvi, o'qituvchi qo'shish |
-| `supportteacher` | Talaba/guruh faqat ko'rish |
-| `teacher` | Faqat profil va asosiy ko'rish |
+| Access (сотрудник) | 24 часа |
+| Refresh (сотрудник) | 7 дней |
+| Access (студент) | 24 часа (без refresh) |
+
+### 4.3 RBAC — роли и права
+
+Роли и их permissions хранятся в MongoDB (коллекция `roles`), не в коде. Это позволяет менять права через API без деплоя.
+
+- Инициализация: `src/seeders/roles.seeder.js` (запускается при каждом старте, идемпотентно)
+- Кэш permissions в `auth.middleware.js`: TTL 60 секунд
+- Суперадмин имеет право `*` (все права)
+
+Middleware:
+- `requireAuth` — проверяет employee токен, загружает `req.userDocument`
+- `requireStudentAuth` — проверяет student токен, загружает `req.student`
+- `allowRoles(...roles)` — разрешает только указанные роли
+- `allowPermissions(...perms)` — проверяет наличие прав у роли (через кэш из БД)
+
+### 4.4 Финансы — append-only ledger
+
+Модель `FinancialEvent` (коллекция `financialevents`) хранит все финансовые события как неизменяемые записи. Mongoose middleware блокирует любые `update`/`delete` операции на уровне модели.
+
+Типы событий: `salary_update`, `bonus`, `fine`.
+
+Текущий баланс сотрудника = агрегация всех его событий (`finance.service.js`).
+
+При удалении нарушения (`DELETE /api/forbidden/violations/:id`) автоматически создаётся компенсирующий `fine` с отрицательной суммой.
+
+### 4.5 Face ID
+
+Биометрические данные вынесены в отдельную коллекцию `FaceCredential` (не хранятся в `User`). Дескриптор лица зашифрован. Логин через лицо: `POST /api/auth/login/face`.
+
+### 4.6 Доп. уроки (Extra Lessons) — система бронирования
+
+Фиксированные слоты: 5 в день на учителя. Рабочее время 14:00–20:00 (UTC+5).
+Слоты: 14:00 / 15:10 / 16:20 / 17:30 / 18:40 (60 мин урок + 10 мин отдых = 70 мин интервал).
+
+Флаг `User.isExtraLessonSupport: true` отмечает учителей доп. уроков (независимо от их роли).
+
+Статусы: `pending_approval` → `confirmed` → `completed`, или `pending_approval`/`confirmed` → `cancelled`.
+
+### 4.7 Формат ошибок
+
+Глобальный middleware (`errorHandler.js`) и нормализатор в `app.js` гарантируют единый формат:
+
+```json
+{
+  "message": "Human readable description",
+  "code": "SCREAMING_SNAKE_CASE_CODE",
+  "field": null
+}
+```
+
+### 4.8 Валидация ObjectId
+
+`src/middleware/validateObjectId.js` — factory-middleware. Принимает список имён параметров и возвращает 400 `INVALID_OBJECT_ID` если хотя бы один не является валидным MongoDB ObjectId.
+
+```js
+validateObjectId('lessonId', 'studentId')
+```
 
 ---
 
-## Token tizimi
-
-- **Access token**: 5 soat amal qiladi
-- **Refresh token**: 7 kun amal qiladi
-- **Bearer** formatida yuboriladi: `Authorization: Bearer <token>`
-- Logout qilganda refresh token o'chiriladi
-
----
-
-## API Endpointlar
+## 5. API маршруты
 
 ### Auth — `/api/auth`
 
-| Method | Endpoint | Rol | Tavsif |
-|---|---|---|---|
-| POST | `/register` | superadmin | Yangi foydalanuvchi ro'yxatdan o'tkazish |
-| POST | `/login` | — | Email/telefon + parol bilan kirish |
-| POST | `/refresh` | — | Access tokenni yangilash |
-| POST | `/logout` | auth | Chiqish |
-| GET | `/me` | auth | O'z profilini olish |
-| GET | `/users` | admin+ | Barcha foydalanuvchilar ro'yxati |
-| POST | `/face-id/register` | auth | Face ID ro'yxatdan o'tkazish |
-| POST | `/face-id/login` | — | Face ID bilan kirish |
-| DELETE | `/face-id/remove` | auth | Face ID o'chirish |
-| PATCH | `/users/:id/role` | superadmin | Foydalanuvchi rolini o'zgartirish |
-
-#### Login so'rovi
-```json
-{
-  "login": "email@example.com",  // yoki telefon
-  "password": "password123"
-}
+```
+POST   /api/auth/register                          — регистрация сотрудника (только superadmin)
+POST   /api/auth/login                             — логин по паролю
+POST   /api/auth/login/face                        — логин через Face ID
+POST   /api/auth/face/enroll                       — добавить данные лица
+DELETE /api/auth/face/revoke                       — удалить Face ID
+POST   /api/auth/refresh-token                     — обновить токены
+POST   /api/auth/logout                            — выход
+GET    /api/auth/me                                — текущий пользователь
+GET    /api/auth/users                             — список сотрудников
+PATCH  /api/auth/users/:userId/role                — изменить роль (superadmin)
+PATCH  /api/auth/users/:userId                     — обновить профиль
+DELETE /api/auth/users/:userId                     — удалить (superadmin)
+GET    /api/auth/roles                             — список ролей с правами
+PATCH  /api/auth/roles/:roleName/permissions       — изменить права роли (superadmin)
 ```
 
-#### Register so'rovi
-```json
-{
-  "fullName": "Ism Familiya",
-  "phone": "+998901234567",
-  "email": "email@example.com",
-  "password": "password123",
-  "role": "teacher",
-  "dateOfBirth": "1990-01-01",
-  "gender": "male"
-}
+### Students — `/api/students`
+
+```
+POST   /api/students/login                         — логин студента
+GET    /api/students                               — список студентов
+POST   /api/students                               — создать студента
+GET    /api/students/:studentId                    — студент по ID
+PATCH  /api/students/:studentId                    — обновить
+DELETE /api/students/:studentId                    — удалить (admin+)
+GET    /api/students/:studentId/groups             — группы студента
+POST   /api/students/:studentId/reward             — начислить монеты
 ```
 
----
+### Groups — `/api/groups`
 
-### Talabalar — `/api/students`
-
-| Method | Endpoint | Rol | Tavsif |
-|---|---|---|---|
-| POST | `/` | admin+ | Yangi talaba qo'shish |
-| GET | `/` | auth | Talabalar ro'yxati (pagination + qidiruv) |
-| GET | `/:id` | auth | Bitta talaba |
-| PATCH | `/:id` | admin+ | Talabani tahrirlash |
-| DELETE | `/:id` | admin+ | Talabani o'chirish |
-| POST | `/login` | — | Talaba kirishi |
-| POST | `/:id/coins` | admin+ | Coin mukofot berish |
-| GET | `/:id/groups` | auth | Talabaning guruhlari |
-| POST | `/:id/groups` | admin+ | Talabani guruhga qo'shish |
-| DELETE | `/:id/groups/:groupId` | admin+ | Talabani guruhdan chiqarish |
-
-#### Talaba yaratish so'rovi
-```json
-{
-  "fullName": "Talaba Ismi",
-  "studentPhone": "+998901234567",
-  "parentPhone": "+998901234568",
-  "birthDate": "2005-05-15",
-  "gender": "male"
-}
+```
+GET    /api/groups                                 — список групп
+POST   /api/groups                                 — создать группу
+GET    /api/groups/:groupId                        — группа по ID
+PATCH  /api/groups/:groupId                        — обновить
+DELETE /api/groups/:groupId                        — удалить (admin+)
+POST   /api/groups/:groupId/students               — добавить студента в группу
+DELETE /api/groups/:groupId/students/:studentId    — убрать студента из группы
+POST   /api/groups/:groupId/support-teachers       — добавить support-учителя в группу
+DELETE /api/groups/:groupId/support-teachers/:uid  — убрать support-учителя из группы
+POST   /api/groups/:groupId/attendance             — отметить посещаемость
+GET    /api/groups/:groupId/attendance             — получить посещаемость
+GET    /api/groups/:groupId/lessons                — уроки группы
+POST   /api/groups/:groupId/lessons                — создать урок
+GET    /api/groups/:groupId/lessons/:lessonId      — урок по ID
+PATCH  /api/groups/:groupId/lessons/:lessonId      — обновить урок
+DELETE /api/groups/:groupId/lessons/:lessonId      — удалить урок
 ```
 
-#### Talaba modeli maydonlari
-| Maydon | Tur | Tavsif |
-|---|---|---|
-| `fullName` | String | To'liq ism (required) |
-| `studentPhone` | String | Talaba telefoni (unique) |
-| `parentPhone` | String | Ota-ona telefoni |
-| `birthDate` | Date | Tug'ilgan sana |
-| `gender` | String | `male` / `female` |
-| `balance` | Number | Balans (30 kunda reset) |
-| `coins` | Number | Coin mukofotlar |
-| `groupAttachments` | Array | Guruhlarga birikish holati |
-| `groupAttached` | Boolean | Hozir aktiv guruhda bormi |
+### Courses — `/api/courses`
 
-#### `groupAttachments` massivining har bir elementi
-```json
-{
-  "group": "GroupId",
-  "status": "active",   // active | paused | completed | left
-  "joinedAt": "2024-01-01",
-  "leftAt": null
-}
+```
+GET    /api/courses                                — список курсов
+POST   /api/courses                                — создать курс
+GET    /api/courses/:courseId                      — курс по ID
+PATCH  /api/courses/:courseId                      — обновить
+DELETE /api/courses/:courseId                      — удалить
 ```
 
----
+### Homework — `/api/homework`
 
-### Guruhlar — `/api/groups`
-
-| Method | Endpoint | Rol | Tavsif |
-|---|---|---|---|
-| POST | `/` | admin+ | Yangi guruh yaratish |
-| GET | `/` | auth | Guruhlar ro'yxati |
-| GET | `/:id` | auth | Bitta guruh |
-| PATCH | `/:id` | admin+ | Guruhni tahrirlash |
-| DELETE | `/:id` | admin+ | Guruhni o'chirish |
-| POST | `/:id/students` | admin+ | Guruhga talaba qo'shish |
-| DELETE | `/:id/students/:studentId` | admin+ | Guruhdan talabani chiqarish |
-| PATCH | `/:id/attendance` | teacher+ | Davomat yangilash (bulk) |
-| PATCH | `/:id/attendance/:studentId` | teacher+ | Bitta talaba davomati |
-
-#### Guruh yaratish so'rovi
-```json
-{
-  "name": "Guruh nomi",
-  "course": "CourseId",
-  "groupType": "odd",
-  "teacher": "TeacherId",
-  "supportTeachers": ["TeacherId2"],
-  "startDate": "2024-01-01",
-  "monthlyFee": 500000,
-  "schedule": [
-    { "day": "monday", "time": "09:00", "duration": 90 },
-    { "day": "wednesday", "time": "09:00", "duration": 90 },
-    { "day": "friday", "time": "09:00", "duration": 90 }
-  ]
-}
+```
+GET    /api/homework                               — список заданий
+POST   /api/homework                               — создать задание / submission
+GET    /api/homework/:submissionId                 — по ID
+PATCH  /api/homework/:submissionId                 — обновить / проверить / оценить
+DELETE /api/homework/:submissionId                 — удалить
 ```
 
-#### Guruh turlari
-| tur | Kunlar |
-|---|---|
-| `odd` | Dushanba, Chorshanba, Juma |
-| `even` | Seshanba, Payshanba, Shanba |
+### Finance — `/api/finance`
 
-#### Guruh holatlari
-`planned` → `active` → `paused` → `completed` → `archived`
-
-#### Davomat so'rovi (bulk)
-```json
-{
-  "date": "2024-01-15",
-  "attendance": [
-    { "student": "StudentId", "present": true },
-    { "student": "StudentId2", "present": false }
-  ]
-}
+```
+GET    /api/finance/transactions                           — список транзакций
+DELETE /api/finance/transactions/:transactionId            — всегда 405 (ledger immutable)
+GET    /api/finance/employees                              — сотрудники с финансами
+GET    /api/finance/employees/:employeeId                  — финансовое резюме
+PATCH  /api/finance/employees/:employeeId/salary           — установить зарплату (admin+)
+POST   /api/finance/employees/:employeeId/bonus            — добавить бонус
+POST   /api/finance/employees/:employeeId/fine             — добавить штраф вручную
 ```
 
----
+### Forbidden — `/api/forbidden`
 
-### Kurslar — `/api/courses`
-
-| Method | Endpoint | Rol | Tavsif |
-|---|---|---|---|
-| POST | `/` | admin+ | Yangi kurs yaratish |
-| GET | `/` | auth | Kurslar ro'yxati |
-| GET | `/:id` | auth | Bitta kurs |
-| PATCH | `/:id` | admin+ | Kursni tahrirlash |
-| DELETE | `/:id` | admin+ | Kursni o'chirish |
-| POST | `/:courseId/lessons` | admin+ | Kursga dars qo'shish |
-| GET | `/:courseId/lessons` | auth | Kurs darslari |
-| GET | `/:courseId/lessons/:lessonId` | auth | Bitta dars |
-| PATCH | `/:courseId/lessons/:lessonId` | admin+ | Darsni tahrirlash |
-| DELETE | `/:courseId/lessons/:lessonId` | admin+ | Darsni o'chirish |
-| POST | `/:courseId/lessons/:lessonId/documents` | admin+ | Darsga hujjat yuklash |
-| DELETE | `/:courseId/lessons/:lessonId/documents/:docId` | admin+ | Hujjatni o'chirish |
-
-#### Kurs yaratish so'rovi
-```json
-{
-  "name": "Kurs nomi",
-  "durationMonths": 6,
-  "price": 600000
-}
+```
+GET    /api/forbidden/rules                        — список правил
+POST   /api/forbidden/rules                        — создать правило
+GET    /api/forbidden/rules/:ruleId                — правило по ID
+PATCH  /api/forbidden/rules/:ruleId                — обновить
+DELETE /api/forbidden/rules/:ruleId                — удалить
+GET    /api/forbidden/violations                   — список нарушений
+POST   /api/forbidden/violations                   — зафиксировать нарушение (→ штраф)
+GET    /api/forbidden/violations/:violationId      — нарушение по ID
+DELETE /api/forbidden/violations/:violationId      — удалить (→ сторно штрафа)
 ```
 
-> **Muhim**: Kurs dars soni `durationMonths * 12` dan oshmasligi kerak.
+### Extra Lessons — `/api/extra-lessons`
 
-#### Dars yaratish so'rovi
-```json
-{
-  "title": "Dars mavzusi",
-  "duration": 90,
-  "description": "Dars tavsifi",
-  "homeworkDescription": "Uyga vazifa tavsifi",
-  "homeworkLinks": ["https://link.com"]
-}
+```
+— Управление support-учителями (admin+) —
+GET    /api/extra-lessons/support-teachers                 — список (любой сотрудник)
+POST   /api/extra-lessons/support-teachers/:userId         — назначить (admin+)
+DELETE /api/extra-lessons/support-teachers/:userId         — снять (admin+)
+
+— Расписание и бронирование —
+GET    /api/extra-lessons/availability                     — свободные слоты (БЕЗ авторизации)
+POST   /api/extra-lessons/book                             — забронировать (student token)
+GET    /api/extra-lessons/my-lessons                       — мои уроки (student token)
+
+— Очередь заявок (employee token) —
+GET    /api/extra-lessons/requests                         — список ожидающих заявок
+
+— CRUD (employee token) —
+GET    /api/extra-lessons                                  — все уроки
+POST   /api/extra-lessons                                  — создать урок напрямую (support teacher+)
+GET    /api/extra-lessons/:lessonId                        — урок по ID
+PATCH  /api/extra-lessons/:lessonId                        — обновить
+DELETE /api/extra-lessons/:lessonId                        — удалить (admin+)
+
+— Управление заявками (employee token) —
+PATCH  /api/extra-lessons/:lessonId/approve                — одобрить заявку
+PATCH  /api/extra-lessons/:lessonId/deny                   — отклонить заявку
+PATCH  /api/extra-lessons/:lessonId/complete               — завершить урок
+
+— Студенты в уроке (employee token) —
+POST   /api/extra-lessons/:lessonId/students               — добавить студентов (массив)
+DELETE /api/extra-lessons/:lessonId/students/:studentId    — убрать студента
 ```
 
-> **Muhim**: `order` (tartib) avtomatik belgilanadi, qo'lda kiritilsa e'tiborga olinmaydi.
+### Leads — `/api/leads`
 
-#### Kurs modeli maydonlari
-| Maydon | Tur | Tavsif |
-|---|---|---|
-| `name` | String | Kurs nomi (unique) |
-| `durationMonths` | Number | Davomiyligi (oy) |
-| `price` | Number | Narxi |
-| `methodology` | Array | Darslar ID ro'yxati |
-| `groupsCount` | Number | Avtomatik hisoblanadi |
-
----
-
-### Uyga vazifa — `/api/homework`
-
-| Method | Endpoint | Rol | Tavsif |
-|---|---|---|---|
-| POST | `/` | student | Vazifa topshirish |
-| GET | `/` | teacher+ | Barcha topshirilgan vazifalar |
-| GET | `/:id` | auth | Bitta vazifa |
-| PATCH | `/:id/grade` | teacher+ | Bahо qo'yish |
-| GET | `/student/:studentId` | auth | Talabaning vazifalari |
-
-#### Vazifa topshirish so'rovi
-```json
-{
-  "lesson": "LessonId",
-  "group": "GroupId",
-  "description": "Vazifa tavsifi",
-  "links": ["https://github.com/..."]
-}
 ```
-
-#### Baho qo'yish so'rovi
-```json
-{
-  "score": 85,
-  "status": "approved"
-}
-```
-
-#### Vazifa holatlari
-- `submitted` — topshirildi
-- `approved` — tasdiqlandi
-
----
-
-## Fayl yuklash
-
-### Fayl turlari va chegaralar
-
-| Tur | Max hajm | Ruxsat etilgan formatlar |
-|---|---|---|
-| Avatar | 2 MB | jpg, jpeg, png, gif, webp |
-| Dars hujjati | 25 MB | pdf, doc, docx, ppt, pptx, xls, xlsx, txt, zip, rar, mp4, mp3 |
-| Uyga vazifa | 25 MB | yuqoridagi formatlar |
-
-### Fayllar URL formati
-```
-https://yourdomain.com/uploads/<filename>
+GET    /api/leads                                  — список лидов
+POST   /api/leads                                  — создать лид
+GET    /api/leads/:leadId                          — лид по ID
+PATCH  /api/leads/:leadId                          — обновить
+DELETE /api/leads/:leadId                          — удалить
 ```
 
 ---
 
-## Tizim endpointlari
+## 6. Структура папок
 
-| Endpoint | Tavsif |
-|---|---|
-| `GET /health` | Server holati tekshirish |
-| `GET /api-docs` | Swagger UI |
-| `GET /api-docs-json` | OpenAPI JSON |
-| `GET /face-id-demo` | Face ID test sahifasi |
-| `GET /uploads/:file` | Yuklangan fayllar |
-
----
-
-## Face ID tizimi
-
-- **128 o'lchovli descriptor** ishlatiladi
-- **Evklid masofasi** bilan taqqoslanadi
-- Chegara (threshold): `0.45` (sozlanadi `FACE_MATCH_THRESHOLD` orqali)
-- Eng yaqin descriptor topilsa, token qaytariladi
-
-#### Face ID ro'yxatdan o'tkazish
-```json
-{
-  "descriptor": [0.1, 0.2, ..., 0.5]   // 128 ta son
-}
+```
+BackZuhr/
+├── app.js                          — Express-приложение, middleware, роуты
+├── index.js                        — Точка входа: подключение к БД, запуск сервера
+├── public/
+│   └── face-id-demo.html           — Тестовая страница Face ID
+├── uploads/                        — Загруженные файлы (аватары)
+└── src/
+    ├── config/
+    │   ├── db.js                   — Подключение к MongoDB + запуск seeders
+    │   └── swagger.js              — Конфигурация Swagger
+    ├── controllers/                — Обработчики запросов (бизнес-логика)
+    │   ├── auth.controller.js
+    │   ├── student.controller.js
+    │   ├── group.controller.js
+    │   ├── course.controller.js
+    │   ├── homework.controller.js
+    │   ├── finance.controller.js
+    │   ├── forbidden.controller.js
+    │   ├── extra-lesson.controller.js
+    │   └── lead.controller.js
+    ├── middleware/
+    │   ├── auth.middleware.js       — requireAuth, requireStudentAuth, allowRoles, allowPermissions
+    │   ├── validateObjectId.js      — Factory: проверка ObjectId в URL-параметрах
+    │   └── errorHandler.js         — Глобальный обработчик ошибок
+    ├── model/                      — Основные Mongoose-модели
+    │   ├── user.model.js           — Сотрудник
+    │   ├── student.model.js        — Студент
+    │   ├── group.model.js          — Группа (расписание, посещаемость)
+    │   ├── lesson.model.js         — Урок внутри группы
+    │   ├── course.model.js         — Шаблон курса
+    │   ├── homework-submission.model.js
+    │   ├── extra-lesson.model.js   — Доп. уроки (слоты, бронирование)
+    │   ├── forbidden-rule.model.js — Правила запрещённых действий
+    │   ├── employee-violation.model.js — Нарушения сотрудников
+    │   └── lead.model.js           — Лиды (CRM)
+    ├── models/                     — Вспомогательные модели
+    │   ├── Role.model.js           — Роли с permissions (RBAC)
+    │   ├── FinancialEvent.model.js — Append-only финансовый ledger
+    │   └── FaceCredential.model.js — Биометрические данные (Face ID)
+    ├── routes/                     — Express-роуты со Swagger-аннотациями
+    │   ├── auth.routes.js
+    │   ├── student.routes.js
+    │   ├── group.routes.js
+    │   ├── course.routes.js
+    │   ├── homework.routes.js
+    │   ├── finance.routes.js
+    │   ├── forbidden.routes.js
+    │   ├── extra-lesson.routes.js
+    │   └── lead.routes.js
+    ├── services/
+    │   ├── finance.service.js              — Агрегация финансового баланса
+    │   ├── course-sync.service.js          — Синхронизация курс ↔ группы
+    │   └── student-balance-reset.service.js — Периодический сброс баланса студентов
+    ├── seeders/
+    │   └── roles.seeder.js                 — Инициализация ролей (запускается при старте)
+    └── utils/
+        ├── token.js                        — Генерация и верификация JWT
+        └── AppError.js                     — Класс кастомных ошибок
 ```
 
 ---
 
-## Servislar
+## 7. Ключевые решения
 
-### Student Balance Reset Service
-- Har 30 kunda talaba balansi avtomatik `0` ga qaytadi
-- `STUDENT_BALANCE_RESET_INTERVAL_MS` orqali interval sozlanadi
-- Ketma-ket chaqiruvlar o'rtasida `STUDENT_BALANCE_RESET_MIN_GAP_MS` vaqt bo'lishi kerak (throttle)
+### Почему два типа токенов?
 
-### Course Sync Service
-- Kursga bog'liq guruhlar soni o'zgarganda `groupsCount` yangilanadi
-- Guruh qo'shilganda/o'chirilganda avtomatik ishga tushadi
+Студенты и сотрудники — принципиально разные сущности с разными правами и workflow. Смешивать их в одну систему означало бы постоянные проверки типа `if (userType === 'student')` везде. Разделение делает каждый middleware простым и предсказуемым.
 
----
+### Почему финансы append-only?a
 
-## Testlar
+Для бухгалтерского аудита. Если можно удалить транзакцию, нельзя восстановить историю. Append-only — стандартная практика для финансовых систем. "Отмена" реализуется через компенсирующую запись, а не удаление.
 
-```bash
-npm test
-```
+### Почему ExtraLesson.students — массив объектов, а не ObjectId?
 
-- `scripts/smoke.test.js` — asosiy sintaksis va integratsiya testlari
-- `scripts/senior.test.js` — kengaytirilgan domenli testlar (**31 ta test**)
+Нужно хранить кто и когда добавил студента (`addedBy`, `addedAt`). Простой массив ObjectId не позволял бы это без отдельной коллекции.
 
-### Test natijalari (barcha o'tadi)
-- Token yaratish va tekshirish
-- Ruxsatlar middleware
-- Face ID ro'yxatdan o'tish va kirish
-- Talaba yaratish va coin berish
-- Davomat tekshirish
-- Guruh jadvali validatsiyasi
-- Kurs dars limiti tekshirish
-- Dars tartib (order) avtomatik belgilash
-- Hujjat yuklash va o'chirish
-- Kurs sinxronizatsiya
-- Balans reset throttle
+### Почему VALID_SLOT_MINUTES_LOCAL?
+
+Слоты рассчитаны по формуле: 14:00 + N×70 минут. Хранятся как минуты от полуночи в локальном времени (UTC+5), чтобы валидация была независима от летнего/зимнего времени и проста для проверки.
+
+### Почему нет отдельного `title` у ExtraLesson?
+
+Тема задаётся через `subject` + `teacherNote`. Урок идентифицируется учителем, временем и студентами — фиксированное название избыточно.
+
+### Порядок маршрутов в extra-lesson.routes.js
+
+Все маршруты с фиксированным сегментом (`/availability`, `/book`, `/my-lessons`, `/requests`, `/support-teachers`) объявлены **до** маршрутов с параметром (`/:lessonId`). Иначе Express попытается интерпретировать строки как ObjectId и вернёт `INVALID_OBJECT_ID`.
 
 ---
 
-## Ishga tushirish
-
-```bash
-# O'rnatish
-npm install
-
-# Development (nodemon bilan)
-npm run dev
-
-# Production
-npm start
-
-# Testlar
-npm test
-```
-
----
-
-## Ma'lumotlar bazasi indekslari
-
-| Kolleksiya | Indeks |
-|---|---|
-| `users` | `phone` (unique), `email` (unique) |
-| `students` | `studentPhone` (unique) |
-| `groups` | `name + startDate` (unique) |
-| `lessons` | `course` (indexed), `course + order` (unique) |
-| `homeworksubmissions` | `lesson + student` (unique) |
-
----
-
-## Qo'shimcha eslatmalar
-
-1. `validateBeforeSave: false` — auth controllerda refresh token saqlashda ishlatiladi (6 joyda)
-2. Davomat faqat **bugun** uchun belgilanishi mumkin, kelajak sana rad etiladi
-3. Guruh talabalar soni: **1–100** oralig'ida
-4. Kurs nomi **unique** bo'lishi kerak
-5. Dars `order` maydoni har doim ketma-ket son oladi (1, 2, 3...) — qo'lda o'zgartirish mumkin emas
+> Для документации API с примерами запросов и ответов — смотри `README.frontend.md`.
+> Для интерактивной документации — открой `GET /api-docs`.

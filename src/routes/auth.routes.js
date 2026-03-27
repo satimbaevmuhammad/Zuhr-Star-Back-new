@@ -4,9 +4,11 @@ const authController = require('../controllers/auth.controller')
 const {
 	requireAuth,
 	allowPermissions,
+	allowRoles,
 	requireRegisterPermission,
 } = require('../middleware/auth.middleware')
 const { uploadAvatar } = require('../middleware/upload.middleware')
+const validateObjectId = require('../middleware/validateObjectId')
 
 const router = express.Router()
 
@@ -16,7 +18,7 @@ const router = express.Router()
  *   post:
  *     tags: [Auth]
  *     summary: Register a user
- *     description: Protected. Only superadmin can create employees (teacher/supporteacher/headteacher/admin). Returns the created user. To set Face ID at creation time, include faceDescriptor in the body.
+ *     description: Protected. Only superadmin can create employees (teacher/supportTeacher/headteacher/admin). Returns the created user. To set Face ID at creation time, include faceDescriptor in the body.
  *     security:
  *       - bearerAuth: []
  *     requestBody:
@@ -51,9 +53,13 @@ const router = express.Router()
  *                 minLength: 8
  *               role:
  *                 type: string
- *                 enum: [teacher, supporteacher, headteacher, admin]
+ *                 enum: [teacher, supportTeacher, headteacher, admin]
  *               company:
  *                 type: string
+ *               salary:
+ *                 type: number
+ *                 minimum: 0
+ *                 example: 3000000
  *               location:
  *                 type: string
  *                 example: '{"type":"Point","coordinates":[69.2401,41.2995]}'
@@ -278,7 +284,7 @@ router.get('/me', requireAuth, authController.me)
  *         name: role
  *         schema:
  *           type: string
- *           enum: [teacher, supporteacher, headteacher, admin, superadmin]
+ *           enum: [teacher, supportTeacher, headteacher, admin, superadmin]
  *     responses:
  *       200:
  *         description: User list
@@ -286,6 +292,21 @@ router.get('/me', requireAuth, authController.me)
  *         description: Forbidden
  */
 router.get('/users', requireAuth, allowPermissions('users:read'), authController.listUsers)
+
+router.get(
+	'/roles',
+	requireAuth,
+	allowRoles('superadmin'),
+	authController.listRoles,
+)
+
+router.patch(
+	'/roles/:roleId',
+	requireAuth,
+	allowRoles('superadmin'),
+	validateObjectId('roleId'),
+	authController.updateRolePermissions,
+)
 
 /**
  * @swagger
@@ -311,7 +332,7 @@ router.get('/users', requireAuth, allowPermissions('users:read'), authController
  *             properties:
  *               role:
  *                 type: string
- *                 enum: [teacher, supporteacher, headteacher, admin, superadmin]
+ *                 enum: [teacher, supportTeacher, headteacher, admin, superadmin]
  *     responses:
  *       200:
  *         description: Role updated successfully
@@ -326,6 +347,7 @@ router.patch(
 	'/users/:userId/role',
 	requireAuth,
 	allowPermissions('users:manage_roles'),
+	validateObjectId('userId'),
 	authController.updateUserRole,
 )
 
@@ -387,6 +409,7 @@ router.patch(
 	'/users/:userId',
 	uploadAvatar,
 	requireAuth,
+	validateObjectId('userId'),
 	authController.updateUser,
 )
 
@@ -420,6 +443,7 @@ router.delete(
 	'/users/:userId',
 	requireAuth,
 	allowPermissions('users:manage'),
+	validateObjectId('userId'),
 	authController.deleteUser,
 )
 

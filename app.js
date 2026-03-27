@@ -13,6 +13,8 @@ const forbiddenRoutes = require('./src/routes/forbidden.routes')
 const extraLessonRoutes = require('./src/routes/extra-lesson.routes')
 const leadRoutes = require('./src/routes/lead.routes')
 const swaggerSpec = require('./src/config/swagger')
+const AppError = require('./src/utils/AppError')
+const errorHandler = require('./src/middleware/errorHandler')
 
 const app = express()
 
@@ -49,9 +51,48 @@ const corsOptions = {
 	exposedHeaders: ['Content-Disposition'],
 }
 
+const STATUS_DEFAULT_CODES = {
+	400: 'BAD_REQUEST',
+	401: 'UNAUTHORIZED',
+	403: 'FORBIDDEN',
+	404: 'NOT_FOUND',
+	405: 'METHOD_NOT_ALLOWED',
+	409: 'CONFLICT',
+	422: 'UNPROCESSABLE_ENTITY',
+	500: 'INTERNAL_SERVER_ERROR',
+}
+
 app.use(cors(corsOptions))
 app.use(express.json({ limit: '1mb' }))
 app.use(express.urlencoded({ extended: true }))
+app.use((req, res, next) => {
+	const originalJson = res.json.bind(res)
+	res.json = payload => {
+		if (res.statusCode >= 400) {
+			const isObjectPayload = payload && typeof payload === 'object' && !Array.isArray(payload)
+			const basePayload = isObjectPayload ? payload : {}
+			const normalizedPayload = {
+				...basePayload,
+				message: String(basePayload.message || 'Request failed'),
+				code: String(
+					basePayload.code ||
+						STATUS_DEFAULT_CODES[res.statusCode] ||
+						STATUS_DEFAULT_CODES[500],
+				),
+				field:
+					Object.prototype.hasOwnProperty.call(basePayload, 'field') &&
+					typeof basePayload.field !== 'undefined'
+						? basePayload.field
+						: null,
+			}
+			return originalJson(normalizedPayload)
+		}
+
+		return originalJson(payload)
+	}
+
+	return next()
+})
 app.use(
 	'/uploads',
 	cors(corsOptions),
@@ -87,20 +128,10 @@ app.use('/api/forbidden', forbiddenRoutes)
 app.use('/api/extra-lessons', extraLessonRoutes)
 app.use('/api/leads', leadRoutes)
 
-app.use((req, res) => {
-	res.status(404).json({ message: 'Route not found' })
+app.use((req, res, next) => {
+	next(new AppError('Route not found', 'ROUTE_NOT_FOUND', 404))
 })
 
-app.use((error, req, res, next) => {
-	const statusCode = error.statusCode || 500
-	const message =
-		statusCode === 500 ? 'Internal server error' : error.message || 'Request failed'
-
-	if (statusCode >= 500) {
-		console.error('Unhandled error:', error)
-	}
-
-	res.status(statusCode).json({ message })
-})
+app.use(errorHandler)
 
 module.exports = app

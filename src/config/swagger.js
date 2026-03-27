@@ -67,7 +67,7 @@ const options = {
 							type: 'string',
 							enum: [
 								'teacher',
-								'supporteacher',
+								'supportTeacher',
 								'headteacher',
 								'admin',
 								'superadmin',
@@ -78,6 +78,8 @@ const options = {
 						faceIdEnabled: { type: 'boolean', example: false },
 						financeBalance: { type: 'number', example: 150000 },
 						salary: { type: 'number', example: 3000000 },
+						bonuses: { type: 'number', example: 450000 },
+						fines: { type: 'number', example: 120000 },
 						createdAt: { type: 'string', format: 'date-time' },
 						updatedAt: { type: 'string', format: 'date-time' },
 					},

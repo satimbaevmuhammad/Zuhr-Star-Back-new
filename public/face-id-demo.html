@@ -211,8 +211,8 @@
 			}
 
 			const descriptor = await getDescriptor();
-			const res = await fetch(`${getApiBase()}/api/auth/face/register`, {
-				method: "POST",
+			const res = await fetch(`${getApiBase()}/api/auth/face`, {
+				method: "PATCH",
 				headers: {
 					"Content-Type": "application/json",
 					Authorization: token.startsWith("Bearer ") ? token : `Bearer ${token}`,

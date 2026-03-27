@@ -1,4 +1,5 @@
 const mongoose = require('mongoose')
+const { seedRoles } = require('../seeders/roles.seeder')
 
 const MAX_RETRIES = 5
 const RETRY_DELAY_MS = 5000
@@ -15,6 +16,7 @@ const connectDB = async () => {
 			await mongoose.connect(mongoUri, {
 				serverSelectionTimeoutMS: 15000,
 			})
+			await seedRoles()
 			console.log('MongoDB connected successfully')
 			return
 		} catch (error) {

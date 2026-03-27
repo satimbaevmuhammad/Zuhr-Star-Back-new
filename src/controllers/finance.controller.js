@@ -1,38 +1,145 @@
 const mongoose = require('mongoose')
-const EmployeeFinance = require('../model/employee-finance.model')
-const User = require('../model/user.model')
 
-// ─── TRANSACTIONS ─────────────────────────────────────────────────────────────
+const User = require('../model/user.model')
+const { FinancialEvent, FINANCIAL_EVENT_TYPES } = require('../models/FinancialEvent.model')
+const {
+	getFinanceSummary,
+	getFinanceSummariesByUserIds,
+} = require('../services/finance.service')
+
+const EMPLOYEE_ROLES = new Set([
+	'teacher',
+	'supportTeacher',
+	'headteacher',
+	'admin',
+	'superadmin',
+])
+
+const isPositiveNumber = value => Number.isFinite(value) && value > 0
+
+const normalizeRoleInput = value => {
+	const normalized = String(value || '').trim()
+	const lowered = normalized.toLowerCase()
+	if (lowered === 'supporteacher' || lowered === 'supportteacher') {
+		return 'supportTeacher'
+	}
+	return lowered
+}
+
+const parsePagination = query => {
+	const limit = Math.min(Math.max(Number(query.limit) || 20, 1), 100)
+	const page = Math.max(Number(query.page) || 1, 1)
+	const skip = (page - 1) * limit
+	return { page, limit, skip }
+}
+
+const resolveEmployee = async employeeId => {
+	if (!mongoose.isValidObjectId(employeeId)) {
+		return { error: 'Invalid employee id', statusCode: 400 }
+	}
+
+	const employee = await User.findById(employeeId).select('fullname phone email role forbidens imgURL')
+	if (!employee) {
+		return { error: 'Employee not found', statusCode: 404 }
+	}
+
+	return { employee }
+}
+
+exports.listEmployees = async (req, res) => {
+	try {
+		const { page, limit, skip } = parsePagination(req.query)
+		const search = String(req.query.search || '').trim()
+		const role = normalizeRoleInput(req.query.role || '')
+
+		const query = {}
+		if (search) {
+			query.$or = [
+				{ fullname: { $regex: search, $options: 'i' } },
+				{ phone: { $regex: search, $options: 'i' } },
+				{ email: { $regex: search, $options: 'i' } },
+			]
+		}
+		if (role && EMPLOYEE_ROLES.has(role)) {
+			query.role = role
+		}
+
+		const [employees, total] = await Promise.all([
+			User.find(query)
+				.sort({ createdAt: -1 })
+				.skip(skip)
+				.limit(limit)
+				.select('fullname phone email role forbidens imgURL'),
+			User.countDocuments(query),
+		])
+
+		const summariesMap = await getFinanceSummariesByUserIds(
+			employees.map(employee => employee._id.toString()),
+		)
+
+		const normalized = employees.map(employee => ({
+			_id: employee._id,
+			fullname: employee.fullname,
+			phone: employee.phone,
+			email: employee.email,
+			role: employee.role,
+			imgURL: employee.imgURL,
+			forbidensCount: Array.isArray(employee.forbidens) ? employee.forbidens.length : 0,
+			finance: summariesMap.get(employee._id.toString()) || {
+				salary: 0,
+				totalBonuses: 0,
+				totalFines: 0,
+				net: 0,
+				takeHomeEstimate: 0,
+			},
+		}))
+
+		return res.status(200).json({
+			page,
+			limit,
+			total,
+			data: normalized,
+		})
+	} catch (error) {
+		console.error('List employees failed:', error)
+		return res.status(500).json({ message: 'Internal server error' })
+	}
+}
 
 exports.listTransactions = async (req, res) => {
 	try {
-		const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100)
-		const page = Math.max(Number(req.query.page) || 1, 1)
-		const skip = (page - 1) * limit
+		const { page, limit, skip } = parsePagination(req.query)
 
 		const query = {}
 		if (req.query.employeeId) {
 			if (!mongoose.isValidObjectId(req.query.employeeId)) {
 				return res.status(400).json({ message: 'Invalid employeeId' })
 			}
-			query.employee = req.query.employeeId
+			query.userId = req.query.employeeId
 		}
-		if (req.query.type && ['bonus', 'fine'].includes(req.query.type)) {
-			query.type = req.query.type
+
+		if (req.query.type) {
+			const type = String(req.query.type || '').trim().toLowerCase()
+			if (!FINANCIAL_EVENT_TYPES.includes(type)) {
+				return res.status(400).json({
+					message: `type must be one of ${FINANCIAL_EVENT_TYPES.join(', ')}`,
+				})
+			}
+			query.type = type
 		}
 
 		const [transactions, total] = await Promise.all([
-			EmployeeFinance.find(query)
-				.sort({ createdAt: -1 })
+			FinancialEvent.find(query)
+				.sort({ createdAt: -1, _id: -1 })
 				.skip(skip)
 				.limit(limit)
-				.populate('employee', 'fullname phone role')
-				.populate('recordedBy', 'fullname role')
-				.populate('relatedViolation', 'note createdAt'),
-			EmployeeFinance.countDocuments(query),
+				.populate('userId', 'fullname phone role')
+				.populate('createdBy', 'fullname role')
+				.populate('relatedViolationId', 'note fineAmount createdAt'),
+			FinancialEvent.countDocuments(query),
 		])
 
-		return res.status(200).json({ page, limit, total, transactions })
+		return res.status(200).json({ page, limit, total, data: transactions })
 	} catch (error) {
 		console.error('List finance transactions failed:', error)
 		return res.status(500).json({ message: 'Internal server error' })
@@ -42,47 +149,23 @@ exports.listTransactions = async (req, res) => {
 exports.getEmployeeFinanceSummary = async (req, res) => {
 	try {
 		const { employeeId } = req.params
-		if (!mongoose.isValidObjectId(employeeId)) {
-			return res.status(400).json({ message: 'Invalid employee id' })
+		const employeeResult = await resolveEmployee(employeeId)
+		if (employeeResult.error) {
+			return res.status(employeeResult.statusCode).json({ message: employeeResult.error })
 		}
 
-		const employee = await User.findById(employeeId).select(
-			'fullname phone role financeBalance forbidens salary',
-		)
-		if (!employee) {
-			return res.status(404).json({ message: 'Employee not found' })
-		}
-
-		// Compute totals from transactions
-		const [bonusAgg, fineAgg] = await Promise.all([
-			EmployeeFinance.aggregate([
-				{ $match: { employee: new mongoose.Types.ObjectId(employeeId), type: 'bonus' } },
-				{ $group: { _id: null, total: { $sum: '$amount' } } },
-			]),
-			EmployeeFinance.aggregate([
-				{ $match: { employee: new mongoose.Types.ObjectId(employeeId), type: 'fine' } },
-				{ $group: { _id: null, total: { $sum: '$amount' } } },
-			]),
-		])
-
-		const totalBonuses = bonusAgg[0]?.total || 0
-		const totalFines = fineAgg[0]?.total || 0
-
+		const summary = await getFinanceSummary(employeeId)
 		return res.status(200).json({
 			employee: {
-				_id: employee._id,
-				fullname: employee.fullname,
-				phone: employee.phone,
-				role: employee.role,
-				financeBalance: employee.financeBalance,
-				forbidens: employee.forbidens,
-				salary: employee.salary,
+				_id: employeeResult.employee._id,
+				fullname: employeeResult.employee.fullname,
+				phone: employeeResult.employee.phone,
+				email: employeeResult.employee.email,
+				role: employeeResult.employee.role,
+				imgURL: employeeResult.employee.imgURL,
+				forbidens: employeeResult.employee.forbidens || [],
 			},
-			summary: {
-				totalBonuses,
-				totalFines,
-				net: totalBonuses - totalFines,
-			},
+			summary,
 		})
 	} catch (error) {
 		console.error('Get employee finance summary failed:', error)
@@ -93,8 +176,9 @@ exports.getEmployeeFinanceSummary = async (req, res) => {
 exports.updateEmployeeSalary = async (req, res) => {
 	try {
 		const { employeeId } = req.params
-		if (!mongoose.isValidObjectId(employeeId)) {
-			return res.status(400).json({ message: 'Invalid employee id' })
+		const employeeResult = await resolveEmployee(employeeId)
+		if (employeeResult.error) {
+			return res.status(employeeResult.statusCode).json({ message: employeeResult.error })
 		}
 
 		const salary = Number(req.body.salary)
@@ -102,24 +186,20 @@ exports.updateEmployeeSalary = async (req, res) => {
 			return res.status(400).json({ message: 'salary must be a non-negative number' })
 		}
 
-		const employee = await User.findById(employeeId)
-		if (!employee) {
-			return res.status(404).json({ message: 'Employee not found' })
-		}
+		const note = String(req.body.note || '').trim() || 'Salary updated'
+		const event = await FinancialEvent.create({
+			userId: employeeId,
+			type: 'salary_update',
+			amount: salary,
+			note,
+			createdBy: req.user.id,
+		})
 
-		employee.salary = salary
-		await employee.save()
-
+		const summary = await getFinanceSummary(employeeId)
 		return res.status(200).json({
 			message: 'Salary updated successfully',
-			employee: {
-				_id: employee._id,
-				fullname: employee.fullname,
-				phone: employee.phone,
-				role: employee.role,
-				salary: employee.salary,
-				financeBalance: employee.financeBalance,
-			},
+			event,
+			summary,
 		})
 	} catch (error) {
 		if (error.name === 'ValidationError') {
@@ -135,49 +215,41 @@ exports.updateEmployeeSalary = async (req, res) => {
 exports.addBonus = async (req, res) => {
 	try {
 		const { employeeId } = req.params
-		if (!mongoose.isValidObjectId(employeeId)) {
-			return res.status(400).json({ message: 'Invalid employee id' })
+		const employeeResult = await resolveEmployee(employeeId)
+		if (employeeResult.error) {
+			return res.status(employeeResult.statusCode).json({ message: employeeResult.error })
 		}
 
 		const amount = Number(req.body.amount)
-		if (!Number.isFinite(amount) || amount <= 0) {
+		if (!isPositiveNumber(amount)) {
 			return res.status(400).json({ message: 'amount must be a positive number' })
 		}
 
-		const reason = String(req.body.reason || '').trim()
-		if (!reason) {
+		const note = String(req.body.reason || req.body.note || '').trim()
+		if (!note) {
 			return res.status(400).json({ message: 'reason is required' })
 		}
-		if (reason.length > 500) {
-			return res.status(400).json({ message: 'reason must be 500 characters or less' })
-		}
 
-		const employee = await User.findById(employeeId)
-		if (!employee) {
-			return res.status(404).json({ message: 'Employee not found' })
-		}
-
-		const transaction = await EmployeeFinance.create({
-			employee: employeeId,
+		const event = await FinancialEvent.create({
+			userId: employeeId,
 			type: 'bonus',
 			amount,
-			reason,
-			recordedBy: req.user._id,
+			note,
+			createdBy: req.user.id,
 		})
 
-		employee.financeBalance += amount
-		await employee.save()
-
+		const summary = await getFinanceSummary(employeeId)
 		return res.status(201).json({
 			message: 'Bonus added',
-			transaction,
-			newBalance: employee.financeBalance,
+			event,
+			summary,
 		})
 	} catch (error) {
 		if (error.name === 'ValidationError') {
 			const msg = Object.values(error.errors || {})[0]?.message
 			return res.status(400).json({ message: msg || 'Validation failed' })
 		}
+
 		console.error('Add bonus failed:', error)
 		return res.status(500).json({ message: 'Internal server error' })
 	}
@@ -186,49 +258,41 @@ exports.addBonus = async (req, res) => {
 exports.addFine = async (req, res) => {
 	try {
 		const { employeeId } = req.params
-		if (!mongoose.isValidObjectId(employeeId)) {
-			return res.status(400).json({ message: 'Invalid employee id' })
+		const employeeResult = await resolveEmployee(employeeId)
+		if (employeeResult.error) {
+			return res.status(employeeResult.statusCode).json({ message: employeeResult.error })
 		}
 
 		const amount = Number(req.body.amount)
-		if (!Number.isFinite(amount) || amount <= 0) {
+		if (!isPositiveNumber(amount)) {
 			return res.status(400).json({ message: 'amount must be a positive number' })
 		}
 
-		const reason = String(req.body.reason || '').trim()
-		if (!reason) {
+		const note = String(req.body.reason || req.body.note || '').trim()
+		if (!note) {
 			return res.status(400).json({ message: 'reason is required' })
 		}
-		if (reason.length > 500) {
-			return res.status(400).json({ message: 'reason must be 500 characters or less' })
-		}
 
-		const employee = await User.findById(employeeId)
-		if (!employee) {
-			return res.status(404).json({ message: 'Employee not found' })
-		}
-
-		const transaction = await EmployeeFinance.create({
-			employee: employeeId,
+		const event = await FinancialEvent.create({
+			userId: employeeId,
 			type: 'fine',
 			amount,
-			reason,
-			recordedBy: req.user._id,
+			note,
+			createdBy: req.user.id,
 		})
 
-		employee.financeBalance -= amount
-		await employee.save()
-
+		const summary = await getFinanceSummary(employeeId)
 		return res.status(201).json({
 			message: 'Fine added',
-			transaction,
-			newBalance: employee.financeBalance,
+			event,
+			summary,
 		})
 	} catch (error) {
 		if (error.name === 'ValidationError') {
 			const msg = Object.values(error.errors || {})[0]?.message
 			return res.status(400).json({ message: msg || 'Validation failed' })
 		}
+
 		console.error('Add fine failed:', error)
 		return res.status(500).json({ message: 'Internal server error' })
 	}
@@ -241,19 +305,22 @@ exports.deleteTransaction = async (req, res) => {
 			return res.status(400).json({ message: 'Invalid transaction id' })
 		}
 
-		const tx = await EmployeeFinance.findByIdAndDelete(transactionId)
-		if (!tx) {
+		const event = await FinancialEvent.findById(transactionId).select('_id relatedViolationId')
+		if (!event) {
 			return res.status(404).json({ message: 'Transaction not found' })
 		}
 
-		// Reverse the balance effect
-		const balanceDelta = tx.type === 'bonus' ? -tx.amount : tx.amount
-		await User.updateOne(
-			{ _id: tx.employee },
-			{ $inc: { financeBalance: balanceDelta } },
-		)
+		if (event.relatedViolationId) {
+			return res.status(409).json({
+				message: 'Transaction is linked to a violation',
+				code: 'VIOLATION_LINKED',
+				violationId: event.relatedViolationId.toString(),
+			})
+		}
 
-		return res.status(200).json({ message: 'Transaction deleted and balance reversed' })
+		return res.status(405).json({
+			message: 'Transactions are immutable and cannot be deleted',
+		})
 	} catch (error) {
 		console.error('Delete transaction failed:', error)
 		return res.status(500).json({ message: 'Internal server error' })

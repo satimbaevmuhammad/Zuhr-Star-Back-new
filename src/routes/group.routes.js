@@ -1,6 +1,7 @@
 const express = require('express')
 const groupController = require('../controllers/group.controller')
 const { requireAuth, allowPermissions } = require('../middleware/auth.middleware')
+const validateObjectId = require('../middleware/validateObjectId')
 
 const router = express.Router()
 
@@ -134,9 +135,24 @@ router.post('/', allowPermissions('groups:manage'), groupController.createGroup)
  *       404:
  *         description: Group not found
  */
-router.get('/:groupId', allowPermissions('groups:read'), groupController.getGroupById)
-router.patch('/:groupId', allowPermissions('groups:manage'), groupController.updateGroup)
-router.delete('/:groupId', allowPermissions('groups:manage'), groupController.deleteGroup)
+router.get(
+	'/:groupId',
+	allowPermissions('groups:read'),
+	validateObjectId('groupId'),
+	groupController.getGroupById,
+)
+router.patch(
+	'/:groupId',
+	allowPermissions('groups:manage'),
+	validateObjectId('groupId'),
+	groupController.updateGroup,
+)
+router.delete(
+	'/:groupId',
+	allowPermissions('groups:manage'),
+	validateObjectId('groupId'),
+	groupController.deleteGroup,
+)
 
 /**
  * @swagger
@@ -185,6 +201,7 @@ router.delete('/:groupId', allowPermissions('groups:manage'), groupController.de
 router.get(
 	'/:groupId/students',
 	allowPermissions('groups:read', 'students:read'),
+	validateObjectId('groupId'),
 	groupController.getGroupStudents,
 )
 
@@ -251,11 +268,13 @@ router.get(
 router.post(
 	'/:groupId/students/:studentId',
 	allowPermissions('groups:manage'),
+	validateObjectId('groupId', 'studentId'),
 	groupController.attachStudentToGroup,
 )
 router.delete(
 	'/:groupId/students/:studentId',
 	allowPermissions('groups:manage'),
+	validateObjectId('groupId', 'studentId'),
 	groupController.detachStudentFromGroup,
 )
 
@@ -301,6 +320,7 @@ router.delete(
 router.post(
 	'/:groupId/attendance',
 	allowPermissions('groups:read'),
+	validateObjectId('groupId'),
 	groupController.upsertGroupAttendance,
 )
 
@@ -352,6 +372,7 @@ router.post(
 router.patch(
 	'/:groupId/attendance/students/:studentId',
 	allowPermissions('groups:read'),
+	validateObjectId('groupId', 'studentId'),
 	groupController.markGroupAttendanceStudent,
 )
 

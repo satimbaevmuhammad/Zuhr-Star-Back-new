@@ -2,6 +2,7 @@ const express = require('express')
 
 const studentController = require('../controllers/student.controller')
 const { requireAuth, allowPermissions } = require('../middleware/auth.middleware')
+const validateObjectId = require('../middleware/validateObjectId')
 
 const router = express.Router()
 
@@ -98,6 +99,7 @@ router.get('/', allowPermissions('students:read'), studentController.getStudents
 router.get(
 	'/:studentId/groups',
 	allowPermissions('students:read', 'groups:read'),
+	validateObjectId('studentId'),
 	studentController.getStudentGroups,
 )
 
@@ -132,6 +134,7 @@ router.get(
 router.post(
 	'/:studentId/reward-coins',
 	allowPermissions('students:manage'),
+	validateObjectId('studentId'),
 	studentController.rewardStudentCoins,
 )
 
@@ -157,7 +160,12 @@ router.post(
  *       404:
  *         description: Student not found
  */
-router.get('/:studentId', allowPermissions('students:read'), studentController.getStudentById)
+router.get(
+	'/:studentId',
+	allowPermissions('students:read'),
+	validateObjectId('studentId'),
+	studentController.getStudentById,
+)
 
 /**
  * @swagger
@@ -275,7 +283,12 @@ router.post('/', allowPermissions('students:manage'), studentController.createSt
  *       409:
  *         description: Duplicate student phone
  */
-router.patch('/:studentId', allowPermissions('students:manage'), studentController.updateStudent)
+router.patch(
+	'/:studentId',
+	allowPermissions('students:manage'),
+	validateObjectId('studentId'),
+	studentController.updateStudent,
+)
 
 /**
  * @swagger
@@ -301,6 +314,11 @@ router.patch('/:studentId', allowPermissions('students:manage'), studentControll
  *       404:
  *         description: Student not found
  */
-router.delete('/:studentId', allowPermissions('students:manage'), studentController.deleteStudent)
+router.delete(
+	'/:studentId',
+	allowPermissions('students:manage'),
+	validateObjectId('studentId'),
+	studentController.deleteStudent,
+)
 
 module.exports = router

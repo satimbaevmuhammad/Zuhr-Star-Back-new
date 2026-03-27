@@ -2,6 +2,7 @@ const express = require('express')
 
 const courseController = require('../controllers/course.controller')
 const { requireAuth, allowPermissions, allowRoles } = require('../middleware/auth.middleware')
+const validateObjectId = require('../middleware/validateObjectId')
 const {
 	uploadLessonDocument,
 	uploadHomeworkAttachment,
@@ -138,9 +139,24 @@ router.post('/', allowPermissions('groups:manage'), courseController.createCours
  *       409:
  *         description: Course has linked groups
  */
-router.get('/:courseId', allowPermissions('groups:read'), courseController.getCourseById)
-router.patch('/:courseId', allowPermissions('groups:manage'), courseController.updateCourse)
-router.delete('/:courseId', allowPermissions('groups:manage'), courseController.deleteCourse)
+router.get(
+	'/:courseId',
+	allowPermissions('groups:read'),
+	validateObjectId('courseId'),
+	courseController.getCourseById,
+)
+router.patch(
+	'/:courseId',
+	allowPermissions('groups:manage'),
+	validateObjectId('courseId'),
+	courseController.updateCourse,
+)
+router.delete(
+	'/:courseId',
+	allowPermissions('groups:manage'),
+	validateObjectId('courseId'),
+	courseController.deleteCourse,
+)
 
 /**
  * @swagger
@@ -215,11 +231,13 @@ router.delete('/:courseId', allowPermissions('groups:manage'), courseController.
 router.get(
 	'/:courseId/lessons',
 	allowPermissions('groups:read'),
+	validateObjectId('courseId'),
 	courseController.getCourseLessons,
 )
 router.post(
 	'/:courseId/lessons',
 	allowRoles('admin', 'headteacher', 'superadmin'),
+	validateObjectId('courseId'),
 	uploadLessonDocument,
 	courseController.createCourseLesson,
 )
@@ -311,12 +329,14 @@ router.post(
 router.patch(
 	'/:courseId/lessons/:lessonId',
 	allowRoles('admin', 'superadmin', 'headteacher'),
+	validateObjectId('courseId', 'lessonId'),
 	uploadLessonDocument,
 	courseController.updateCourseLesson,
 )
 router.delete(
 	'/:courseId/lessons/:lessonId',
 	allowRoles('admin', 'superadmin', 'headteacher'),
+	validateObjectId('courseId', 'lessonId'),
 	courseController.deleteCourseLesson,
 )
 
@@ -350,6 +370,7 @@ router.delete(
 router.get(
 	'/:courseId/lessons/:lessonId/documents',
 	allowPermissions('groups:read'),
+	validateObjectId('courseId', 'lessonId'),
 	courseController.getLessonDocuments,
 )
 
@@ -390,6 +411,7 @@ router.get(
 router.delete(
 	'/:courseId/lessons/:lessonId/documents/:documentId',
 	allowRoles('admin', 'superadmin', 'headteacher'),
+	validateObjectId('courseId', 'lessonId', 'documentId'),
 	courseController.deleteLessonDocument,
 )
 
@@ -466,11 +488,13 @@ router.delete(
 router.get(
 	'/:courseId/lessons/:lessonId/homework',
 	allowPermissions('groups:read'),
+	validateObjectId('courseId', 'lessonId'),
 	courseController.getLessonHomework,
 )
 router.patch(
 	'/:courseId/lessons/:lessonId/homework',
 	allowRoles('admin', 'superadmin', 'headteacher'),
+	validateObjectId('courseId', 'lessonId'),
 	courseController.updateLessonHomework,
 )
 
@@ -517,6 +541,7 @@ router.patch(
 router.post(
 	'/:courseId/lessons/:lessonId/homework/documents',
 	allowRoles('admin', 'superadmin', 'headteacher'),
+	validateObjectId('courseId', 'lessonId'),
 	uploadHomeworkAttachment,
 	courseController.uploadLessonHomeworkDocument,
 )
@@ -558,6 +583,7 @@ router.post(
 router.delete(
 	'/:courseId/lessons/:lessonId/homework/documents/:documentId',
 	allowRoles('admin', 'superadmin', 'headteacher'),
+	validateObjectId('courseId', 'lessonId', 'documentId'),
 	courseController.deleteLessonHomeworkDocument,
 )
 
@@ -588,6 +614,7 @@ router.delete(
 router.post(
 	'/:courseId/rebuild-methodology',
 	allowPermissions('groups:manage'),
+	validateObjectId('courseId'),
 	courseController.rebuildCourseMethodology,
 )
 

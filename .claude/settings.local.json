@@ -7,7 +7,8 @@
       "Bash(grep -r \"eval\\\\|exec\\\\|Function\\\\\\(\" /d/Desktop/BackZuhr/src --include=*.js)",
       "Bash(find /d/Desktop/BackZuhr/src -type f -name *.js -o -name *.json)",
       "Bash(node -e \"require\\(''./app''\\)\")",
-      "Bash(node -e \"require\\(''./src/controllers/group.controller''\\)\")"
+      "Bash(node -e \"require\\(''./src/controllers/group.controller''\\)\")",
+      "Bash(find /d/Desktop/BackZuhr -not -path */node_modules/* -type d)"
     ]
   }
 }

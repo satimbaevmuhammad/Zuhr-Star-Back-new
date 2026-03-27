@@ -71,7 +71,7 @@ exports.listLeads = async (req, res) => {
 			Lead.countDocuments(query),
 		])
 
-		return res.status(200).json({ page, limit, total, leads })
+		return res.status(200).json({ page, limit, total, data: leads })
 	} catch (error) {
 		console.error('List leads failed:', error)
 		return res.status(500).json({ message: 'Internal server error' })

@@ -58,6 +58,18 @@ const normalizeHomeworkAssignment = (lessonDocument, req) => {
 	}
 }
 
+const omitHomeworkDocumentUrls = homeworkAssignment => {
+	const assignment = { ...homeworkAssignment }
+	assignment.documents = Array.isArray(homeworkAssignment?.documents)
+		? homeworkAssignment.documents.map(document => {
+			const normalizedDocument = { ...document }
+			delete normalizedDocument.url
+			return normalizedDocument
+		})
+		: []
+	return assignment
+}
+
 const parseDescription = value => {
 	if (typeof value === 'undefined') {
 		return undefined
@@ -268,17 +280,24 @@ exports.getStudentHomework = async (req, res) => {
 			lesson,
 			group: groupResult.group,
 		})
-		if (!unlockCheck.ok) {
-			return res.status(403).json({
-				message: 'Complete previous homework before accessing this lesson',
-				blockedByLessonId: unlockCheck.blockedBy,
-			})
-		}
 
 		const submission = await HomeworkSubmission.findOne({
 			lesson: lessonId,
 			student: req.student._id,
 		}).select('status score attemptsCount checkedAt submittedAt')
+
+		if (!unlockCheck.ok) {
+			return res.status(200).json({
+				lessonId,
+				courseId: lesson.course,
+				homework: omitHomeworkDocumentUrls(normalizeHomeworkAssignment(lesson, req)),
+				submission: submission || null,
+				groupId: groupResult.group._id,
+				isBlocked: true,
+				blockedReason: 'PRIOR_HOMEWORK_PENDING',
+				blockedByLessonId: unlockCheck.blockedBy,
+			})
+		}
 
 		return res.status(200).json({
 			lessonId,
@@ -286,6 +305,9 @@ exports.getStudentHomework = async (req, res) => {
 			homework: normalizeHomeworkAssignment(lesson, req),
 			submission: submission || null,
 			groupId: groupResult.group._id,
+			isBlocked: false,
+			blockedReason: null,
+			blockedByLessonId: null,
 		})
 	} catch (error) {
 		console.error('Get student homework failed:', error)
@@ -355,8 +377,9 @@ exports.submitStudentHomework = async (req, res) => {
 		})
 		if (!unlockCheck.ok) {
 			safeUnlinkIfExists(uploadedFilePath)
-			return res.status(403).json({
-				message: 'Complete previous homework before submitting this lesson',
+			return res.status(422).json({
+				message: 'Submission blocked',
+				code: 'PRIOR_HOMEWORK_PENDING',
 				blockedByLessonId: unlockCheck.blockedBy,
 			})
 		}
@@ -476,7 +499,7 @@ exports.listHomeworkSubmissions = async (req, res) => {
 			}).select('_id')
 			const groupIds = groups.map(group => group._id)
 			if (groupIds.length === 0) {
-				return res.status(200).json({ page, limit, total: 0, submissions: [] })
+				return res.status(200).json({ page, limit, total: 0, data: [] })
 			}
 			if (query.group) {
 				const allowedGroups = new Set(groupIds.map(groupId => groupId.toString()))
@@ -506,7 +529,7 @@ exports.listHomeworkSubmissions = async (req, res) => {
 			page,
 			limit,
 			total,
-			submissions: submissions.map(submission => normalizeSubmissionResponse(submission, req)),
+			data: submissions.map(submission => normalizeSubmissionResponse(submission, req)),
 		})
 	} catch (error) {
 		console.error('List homework submissions failed:', error)

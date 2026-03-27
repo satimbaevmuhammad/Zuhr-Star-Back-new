@@ -1,6 +1,7 @@
 const express = require('express')
 const forbiddenController = require('../controllers/forbidden.controller')
 const { requireAuth, allowPermissions, allowRoles } = require('../middleware/auth.middleware')
+const validateObjectId = require('../middleware/validateObjectId')
 
 const router = express.Router()
 
@@ -102,8 +103,18 @@ router.post('/rules', allowRoles('admin', 'superadmin'), forbiddenController.cre
  *       404:
  *         description: Rule not found
  */
-router.patch('/rules/:ruleId', allowRoles('admin', 'superadmin'), forbiddenController.updateRule)
-router.delete('/rules/:ruleId', allowRoles('admin', 'superadmin'), forbiddenController.deleteRule)
+router.patch(
+	'/rules/:ruleId',
+	allowRoles('admin', 'superadmin'),
+	validateObjectId('ruleId'),
+	forbiddenController.updateRule,
+)
+router.delete(
+	'/rules/:ruleId',
+	allowRoles('admin', 'superadmin'),
+	validateObjectId('ruleId'),
+	forbiddenController.deleteRule,
+)
 
 // ─── VIOLATIONS ───────────────────────────────────────────────────────────────
 
@@ -208,6 +219,7 @@ router.post(
 router.delete(
 	'/violations/:violationId',
 	allowRoles('admin', 'superadmin'),
+	validateObjectId('violationId'),
 	forbiddenController.deleteViolation,
 )
 

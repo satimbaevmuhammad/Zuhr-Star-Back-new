@@ -403,7 +403,7 @@ exports.getStudents = async (req, res) => {
 			page,
 			limit,
 			total,
-			students,
+			data: students,
 		})
 	} catch (error) {
 		console.error('Get students failed:', error)
@@ -475,10 +475,12 @@ exports.getStudentGroups = async (req, res) => {
 		}))
 
 		return res.status(200).json({
+			page: 1,
+			limit: normalizedGroups.length,
+			total: normalizedGroups.length,
 			studentId: student._id,
 			groupAttached: student.groupAttached,
-			totalGroups: normalizedGroups.length,
-			groups: normalizedGroups,
+			data: normalizedGroups,
 		})
 	} catch (error) {
 		console.error('Get student groups failed:', error)

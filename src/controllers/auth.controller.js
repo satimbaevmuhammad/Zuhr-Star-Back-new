@@ -3,6 +3,9 @@ const path = require('path')
 const mongoose = require('mongoose')
 const User = require('../model/user.model')
 const Group = require('../model/group.model')
+const { FinancialEvent } = require('../models/FinancialEvent.model')
+const FaceCredential = require('../models/FaceCredential.model')
+const Role = require('../models/Role.model')
 const bcrypt = require('bcrypt')
 const {
 	generateAccessToken,
@@ -10,10 +13,18 @@ const {
 	verifyRefreshToken,
 } = require('../utils/token')
 const { toPublicUrl } = require('../utils/public-url')
+const { invalidateRolePermissionsCache } = require('../middleware/auth.middleware')
+
+/**
+ * Face authentication implementation details:
+ * - Storage: 128-length numeric face descriptor is stored in FaceCredential (not in User).
+ * - Descriptor source: generated client-side using face-api.js.
+ * - Matching: Euclidean distance between descriptors; match succeeds when distance <= threshold.
+ */
 
 const ALLOWED_ROLES = new Set([
 	'teacher',
-	'supporteacher',
+	'supportTeacher',
 	'headteacher',
 	'admin',
 	'superadmin',
@@ -22,12 +33,22 @@ const ALLOWED_ROLES = new Set([
 const PHONE_PATTERN = /^\+?[0-9]{7,15}$/
 const SUPERADMIN_REGISTERABLE_ROLES = new Set([
 	'teacher',
-	'supporteacher',
+	'supportTeacher',
 	'headteacher',
 	'admin',
 ])
-const ADMIN_MANAGEABLE_ROLES = new Set(['teacher', 'supporteacher', 'headteacher'])
+const ADMIN_MANAGEABLE_ROLES = new Set(['teacher', 'supportTeacher', 'headteacher'])
 const FACE_DESCRIPTOR_LENGTH = 128
+
+const normalizeRoleInput = value => {
+	const normalized = String(value || '').trim()
+	const lowered = normalized.toLowerCase()
+	if (lowered === 'supporteacher' || lowered === 'supportteacher') {
+		return 'supportTeacher'
+	}
+
+	return lowered
+}
 
 const parseFaceDescriptor = value => {
 	if (typeof value === 'undefined' || value === null) {
@@ -146,7 +167,6 @@ const sanitizeUser = (userDocument, req) => {
 	const user = userDocument?.toObject ? userDocument.toObject() : { ...userDocument }
 	delete user.password
 	delete user.refreshToken
-	delete user.faceDescriptor
 	user.imgURL = toPublicUrl(req, user.imgURL)
 	user.faceIdEnabled = Boolean(user.faceIdEnabled)
 	return user
@@ -197,14 +217,18 @@ exports.updateFaceId = async (req, res) => {
 			})
 		}
 
-		const user = await User.findById(req.user._id).select('+faceDescriptor +refreshToken')
+		const user = await User.findById(req.user.id).select('+refreshToken')
 		if (!user) {
 			return res.status(404).json({ message: 'User not found' })
 		}
 
-		user.faceDescriptor = descriptor
+		await FaceCredential.findOneAndUpdate(
+			{ userId: user._id },
+			{ $set: { descriptor } },
+			{ upsert: true, new: true, setDefaultsOnInsert: true },
+		)
 		user.faceIdEnabled = true
-		await user.save()
+		await user.save({ validateBeforeSave: false })
 
 		return res.status(200).json({
 			message: 'Face ID registered successfully',
@@ -243,17 +267,37 @@ exports.loginWithFaceId = async (req, res) => {
 				? Math.min(envMaxCandidates, 10000)
 				: 2000
 
-		const users = await User.find({ faceIdEnabled: true })
-			.select('+faceDescriptor +refreshToken')
+		const credentials = await FaceCredential.find({})
+			.select('+descriptor userId')
+			.sort({ updatedAt: -1, createdAt: -1 })
 			.limit(maxCandidates)
 
+		const candidateUserIds = credentials
+			.map(item => item.userId?.toString?.() || '')
+			.filter(Boolean)
+		const candidateUsers = await User.find({
+			_id: { $in: candidateUserIds },
+			faceIdEnabled: true,
+		}).select('+refreshToken')
+		const usersMap = new Map(
+			candidateUsers.map(user => [user._id.toString(), user]),
+		)
+
 		let bestMatch = null
-		for (const user of users) {
-			if (!Array.isArray(user.faceDescriptor) || user.faceDescriptor.length !== FACE_DESCRIPTOR_LENGTH) {
+		for (const credential of credentials) {
+			const user = usersMap.get(String(credential.userId))
+			if (!user) {
 				continue
 			}
 
-			const distance = euclideanDistance(descriptor, user.faceDescriptor)
+			if (
+				!Array.isArray(credential.descriptor) ||
+				credential.descriptor.length !== FACE_DESCRIPTOR_LENGTH
+			) {
+				continue
+			}
+
+			const distance = euclideanDistance(descriptor, credential.descriptor)
 			if (!bestMatch || distance < bestMatch.distance) {
 				bestMatch = { user, distance }
 			}
@@ -287,12 +331,12 @@ exports.removeFaceId = async (req, res) => {
 			return res.status(401).json({ message: 'Unauthorized' })
 		}
 
-		const user = await User.findById(req.user._id).select('+faceDescriptor +refreshToken')
+		const user = await User.findById(req.user.id).select('+refreshToken')
 		if (!user) {
 			return res.status(404).json({ message: 'User not found' })
 		}
 
-		user.faceDescriptor = undefined
+		await FaceCredential.deleteOne({ userId: user._id })
 		user.faceIdEnabled = false
 		await user.save({ validateBeforeSave: false })
 
@@ -325,10 +369,13 @@ exports.register = async (req, res) => {
 			.trim()
 			.toLowerCase()
 		const password = req.body.password
-		const requestedRole = String(req.body.role || 'teacher')
-			.trim()
-			.toLowerCase()
+		const requestedRole = normalizeRoleInput(req.body.role || 'teacher')
 		const company = req.body.company ? String(req.body.company).trim() : undefined
+		const salaryInput = req.body.salary
+		const salary =
+			typeof salaryInput === 'undefined' || salaryInput === null || salaryInput === ''
+				? undefined
+				: Number(salaryInput)
 		const parsedLocation = parseLocation(req.body.location)
 		const faceDescriptorInput =
 			typeof req.body.faceDescriptor !== 'undefined'
@@ -345,6 +392,10 @@ exports.register = async (req, res) => {
 
 		if (!PHONE_PATTERN.test(phone)) {
 			return fail(400, 'Invalid phone format')
+		}
+
+		if (typeof salary !== 'undefined' && (!Number.isFinite(salary) || salary < 0)) {
+			return fail(400, 'salary must be a non-negative number')
 		}
 
 		if (!['male', 'female'].includes(gender)) {
@@ -403,6 +454,10 @@ exports.register = async (req, res) => {
 			company,
 		}
 
+		if (typeof salary !== 'undefined') {
+			userPayload.salary = salary
+		}
+
 		if (parsedLocation) {
 			userPayload.location = parsedLocation
 		}
@@ -412,12 +467,33 @@ exports.register = async (req, res) => {
 		}
 
 		if (faceDescriptor) {
-			userPayload.faceDescriptor = faceDescriptor
 			userPayload.faceIdEnabled = true
 		}
 
 		const user = await User.create(userPayload)
 		createdUserId = user._id?.toString?.() || String(user._id || '')
+
+		if (faceDescriptor) {
+			await FaceCredential.findOneAndUpdate(
+				{ userId: user._id },
+				{ $set: { descriptor: faceDescriptor } },
+				{ upsert: true, new: true, setDefaultsOnInsert: true },
+			).catch(error => {
+				console.error('Failed to save face credential during register:', error)
+			})
+		}
+
+		if (typeof salary !== 'undefined') {
+			await FinancialEvent.create({
+				userId: user._id,
+				type: 'salary_update',
+				amount: salary,
+				note: 'Initial salary on registration',
+				createdBy: req.user?.id || user._id,
+			}).catch(eventError => {
+				console.error('Failed to append initial salary event:', eventError)
+			})
+		}
 
 		res.status(201).json({
 			user: sanitizeUser(user, req),
@@ -466,7 +542,7 @@ exports.updateUser = async (req, res) => {
 			return fail(401, 'Unauthorized')
 		}
 
-		if (req.user._id.toString() !== userId) {
+		if (String(req.user.id) !== userId) {
 			return fail(403, 'You can only update your own profile')
 		}
 
@@ -615,7 +691,7 @@ exports.refreshToken = async (req, res) => {
 				.toLowerCase() === 'true'
 
 		const payload = verifyRefreshToken(refreshToken)
-		const user = await User.findById(payload.id).select('+refreshToken')
+		const user = await User.findById(payload.sub || payload.id).select('+refreshToken')
 		if (!user || !user.refreshToken) {
 			return res.status(401).json({ message: 'Invalid refresh token' })
 		}
@@ -645,8 +721,13 @@ exports.logout = async (req, res) => {
 			return res.status(401).json({ message: 'Unauthorized' })
 		}
 
-		req.user.refreshToken = null
-		await req.user.save({ validateBeforeSave: false })
+		const user = req.userDocument || (await User.findById(req.user.id).select('+refreshToken'))
+		if (!user) {
+			return res.status(401).json({ message: 'Unauthorized' })
+		}
+
+		user.refreshToken = null
+		await user.save({ validateBeforeSave: false })
 		return res.status(200).json({ message: 'Logged out successfully' })
 	} catch (error) {
 		console.error('Logout failed:', error)
@@ -660,7 +741,12 @@ exports.me = async (req, res) => {
 			return res.status(401).json({ message: 'Unauthorized' })
 		}
 
-		return res.status(200).json({ user: sanitizeUser(req.user, req) })
+		const user = req.userDocument || (await User.findById(req.user.id).select('+refreshToken'))
+		if (!user) {
+			return res.status(401).json({ message: 'Unauthorized' })
+		}
+
+		return res.status(200).json({ user: sanitizeUser(user, req) })
 	} catch (error) {
 		console.error('Get profile failed:', error)
 		return res.status(500).json({ message: 'Internal server error' })
@@ -673,7 +759,7 @@ exports.listUsers = async (req, res) => {
 		const page = Math.max(Number(req.query.page) || 1, 1)
 		const skip = (page - 1) * limit
 		const search = String(req.query.search || '').trim()
-		const role = String(req.query.role || '').trim().toLowerCase()
+		const role = normalizeRoleInput(req.query.role || '')
 
 		const query = {}
 		if (search) {
@@ -696,7 +782,7 @@ exports.listUsers = async (req, res) => {
 			page,
 			limit,
 			total,
-			users: users.map(user => sanitizeUser(user, req)),
+			data: users.map(user => sanitizeUser(user, req)),
 		})
 	} catch (error) {
 		console.error('List users failed:', error)
@@ -704,12 +790,64 @@ exports.listUsers = async (req, res) => {
 	}
 }
 
+exports.listRoles = async (req, res) => {
+	try {
+		const roles = await Role.find().sort({ name: 1 })
+		return res.status(200).json({
+			page: 1,
+			limit: roles.length,
+			total: roles.length,
+			data: roles,
+		})
+	} catch (error) {
+		console.error('List roles failed:', error)
+		return res.status(500).json({ message: 'Internal server error' })
+	}
+}
+
+exports.updateRolePermissions = async (req, res) => {
+	try {
+		const roleId = String(req.params.roleId || '').trim()
+		if (!mongoose.isValidObjectId(roleId)) {
+			return res.status(400).json({ message: 'Invalid role id' })
+		}
+
+		if (!Array.isArray(req.body.permissions)) {
+			return res.status(400).json({ message: 'permissions must be an array of strings' })
+		}
+
+		const permissions = [...new Set(req.body.permissions.map(item => String(item || '').trim()))]
+			.filter(Boolean)
+
+		if (permissions.length !== req.body.permissions.length) {
+			return res.status(400).json({
+				message: 'permissions must contain unique non-empty strings',
+			})
+		}
+
+		const role = await Role.findById(roleId)
+		if (!role) {
+			return res.status(404).json({ message: 'Role not found' })
+		}
+
+		role.permissions = permissions
+		await role.save()
+		invalidateRolePermissionsCache()
+
+		return res.status(200).json({
+			message: 'Role permissions updated successfully',
+			role,
+		})
+	} catch (error) {
+		console.error('Update role permissions failed:', error)
+		return res.status(500).json({ message: 'Internal server error' })
+	}
+}
+
 exports.updateUserRole = async (req, res) => {
 	try {
 		const userId = req.params.userId
-		const role = String(req.body.role || '')
-			.trim()
-			.toLowerCase()
+		const role = normalizeRoleInput(req.body.role || '')
 
 		if (!ALLOWED_ROLES.has(role)) {
 			return res.status(400).json({ message: 'Invalid role provided' })
@@ -721,7 +859,7 @@ exports.updateUserRole = async (req, res) => {
 			})
 		}
 
-		if (req.user._id.toString() === userId && role !== 'superadmin') {
+		if (String(req.user.id) === userId && role !== 'superadmin') {
 			return res.status(400).json({
 				message: 'You cannot remove your own superadmin access in this endpoint',
 			})
@@ -736,7 +874,7 @@ exports.updateUserRole = async (req, res) => {
 			if (!ADMIN_MANAGEABLE_ROLES.has(role)) {
 				return res.status(403).json({
 					message:
-						'Admin can only assign teacher, supporteacher, or headteacher roles',
+						'Admin can only assign teacher, supportTeacher, or headteacher roles',
 				})
 			}
 
@@ -786,7 +924,7 @@ exports.deleteUser = async (req, res) => {
 			return res.status(400).json({ message: 'Invalid user id' })
 		}
 
-		if (req.user?._id?.toString() === userId) {
+		if (String(req.user?.id || '') === userId) {
 			return res.status(400).json({
 				message: 'You cannot delete your own account in this endpoint',
 			})

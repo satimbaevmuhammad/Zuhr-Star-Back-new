@@ -166,6 +166,25 @@ const parseSchedule = (input, { groupType } = {}) => {
 	return normalized
 }
 
+const containsExplicitDayOfWeek = input => {
+	const parsed = parseJsonIfNeeded(input)
+	if (!Array.isArray(parsed)) {
+		return false
+	}
+
+	return parsed.some(item => {
+		if (!item || typeof item !== 'object') {
+			return false
+		}
+
+		if (!Object.prototype.hasOwnProperty.call(item, 'dayOfWeek')) {
+			return false
+		}
+
+		return String(item.dayOfWeek || '').trim() !== ''
+	})
+}
+
 const parseObjectIdArray = input => {
 	if (typeof input === 'undefined') {
 		return undefined
@@ -581,6 +600,13 @@ exports.createGroup = async (req, res) => {
 			return res.status(400).json({ message: 'groupType must be even or odd' })
 		}
 
+		if (containsExplicitDayOfWeek(req.body.schedule)) {
+			return res.status(400).json({
+				message: 'Cannot specify both groupType and dayOfWeek',
+				code: 'AMBIGUOUS_SCHEDULE',
+			})
+		}
+
 		if (!schedule || !matchesGroupTypeSchedule({ schedule, groupType })) {
 			return res.status(400).json({ message: GROUP_TYPE_SCHEDULE_MESSAGE })
 		}
@@ -706,6 +732,8 @@ exports.createGroup = async (req, res) => {
 		return res.status(201).json({
 			message: 'Group created successfully',
 			group: attachGroupComputedFields(populatedGroup, 0),
+			groupTypeApplied: true,
+			resolvedDays: GROUP_TYPE_DAY_MAP[groupType],
 		})
 	} catch (error) {
 		if (error.code === 11000) {
@@ -774,7 +802,7 @@ exports.getGroups = async (req, res) => {
 			page,
 			limit,
 			total,
-			groups: normalizedGroups,
+			data: normalizedGroups,
 		})
 	} catch (error) {
 		console.error('Get groups failed:', error)
@@ -953,6 +981,13 @@ exports.updateGroup = async (req, res) => {
 		}
 
 		if (typeof req.body.schedule !== 'undefined') {
+			if (containsExplicitDayOfWeek(req.body.schedule)) {
+				return res.status(400).json({
+					message: 'Cannot specify both groupType and dayOfWeek',
+					code: 'AMBIGUOUS_SCHEDULE',
+				})
+			}
+
 			const schedule = parseSchedule(req.body.schedule, { groupType: nextGroupType })
 			if (!schedule) {
 				return res.status(400).json({ message: GROUP_TYPE_SCHEDULE_MESSAGE })
@@ -1024,6 +1059,8 @@ exports.updateGroup = async (req, res) => {
 		return res.status(200).json({
 			message: 'Group updated successfully',
 			group: attachGroupComputedFields(updatedGroup, studentsCount),
+			groupTypeApplied: true,
+			resolvedDays: GROUP_TYPE_DAY_MAP[nextGroupType],
 		})
 	} catch (error) {
 		if (error.code === 11000) {
@@ -1115,7 +1152,7 @@ exports.getGroupStudents = async (req, res) => {
 			page,
 			limit,
 			total,
-			students: normalizedStudents,
+			data: normalizedStudents,
 		})
 	} catch (error) {
 		console.error('Get group students failed:', error)

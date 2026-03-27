@@ -1,63 +1,110 @@
+/**
+ * Unified JWT utilities for employee and student authentication.
+ * Exports helpers to sign/verify access and refresh tokens with one secret.
+ */
+
 const jwt = require('jsonwebtoken')
-const crypto = require('crypto')
 
-const getAccessSecret = () => process.env.JWT_ACCESS_SECRET || process.env.JWT_SECRET
-const getRefreshSecret = () => process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET
+const JWT_ALGORITHM = 'HS256'
+const EMPLOYEE_ACCESS_EXPIRES_IN = '24h'
+const EMPLOYEE_REFRESH_EXPIRES_IN = '7d'
+const STUDENT_ACCESS_EXPIRES_IN = '24h'
 
-const ensureSecret = (secret, name) => {
+const resolveSecret = () =>
+	process.env.JWT_SECRET || process.env.JWT_ACCESS_SECRET || process.env.JWT_REFRESH_SECRET
+
+const ensureSecret = () => {
+	const secret = resolveSecret()
 	if (!secret) {
-		throw new Error(`${name} is required`)
+		throw new Error('JWT_SECRET is required')
 	}
+	return secret
 }
 
-const generateAccessToken = user => {
-	const secret = getAccessSecret()
-	ensureSecret(secret, 'JWT_ACCESS_SECRET or JWT_SECRET')
+const resolveEntityId = entity => String(entity?._id || entity?.id || entity?.sub || '').trim()
 
+const signToken = ({ sub, role, userType, tokenType, expiresIn }) => {
+	const secret = ensureSecret()
 	return jwt.sign(
-		{ id: user._id, role: user.role },
+		{
+			sub,
+			id: sub, // legacy compatibility for existing consumers
+			role,
+			userType,
+			tokenType,
+		},
 		secret,
-		{ expiresIn: '5h' },
+		{
+			expiresIn,
+			algorithm: JWT_ALGORITHM,
+		},
 	)
 }
 
-const generateRefreshToken = user => {
-	const secret = getRefreshSecret()
-	ensureSecret(secret, 'JWT_REFRESH_SECRET or JWT_SECRET')
+const generateAccessToken = user => {
+	const sub = resolveEntityId(user)
+	return signToken({
+		sub,
+		role: String(user?.role || '').trim() || 'teacher',
+		userType: 'employee',
+		tokenType: 'access',
+		expiresIn: EMPLOYEE_ACCESS_EXPIRES_IN,
+	})
+}
 
-	return jwt.sign({ id: user._id }, secret, {
-		expiresIn: '7d',
-		jwtid: crypto.randomUUID(),
+const generateRefreshToken = user => {
+	const sub = resolveEntityId(user)
+	return signToken({
+		sub,
+		role: String(user?.role || '').trim() || 'teacher',
+		userType: 'employee',
+		tokenType: 'refresh',
+		expiresIn: EMPLOYEE_REFRESH_EXPIRES_IN,
 	})
 }
 
 const generateStudentAccessToken = student => {
-	const secret = getAccessSecret()
-	ensureSecret(secret, 'JWT_ACCESS_SECRET or JWT_SECRET')
-
-	return jwt.sign(
-		{ id: student._id, role: 'student', type: 'student' },
-		secret,
-		{ expiresIn: '5h' },
-	)
+	const sub = resolveEntityId(student)
+	return signToken({
+		sub,
+		role: 'student',
+		userType: 'student',
+		tokenType: 'access',
+		expiresIn: STUDENT_ACCESS_EXPIRES_IN,
+	})
 }
 
-const verifyAccessToken = token => {
-	const secret = getAccessSecret()
-	ensureSecret(secret, 'JWT_ACCESS_SECRET or JWT_SECRET')
-	return jwt.verify(token, secret)
+const verifyToken = (token, { expectedTokenType } = {}) => {
+	const secret = ensureSecret()
+	const payload = jwt.verify(token, secret, {
+		algorithms: [JWT_ALGORITHM],
+	})
+
+	if (
+		!payload ||
+		typeof payload.sub !== 'string' ||
+		typeof payload.role !== 'string' ||
+		typeof payload.userType !== 'string'
+	) {
+		throw new Error('Invalid token payload')
+	}
+
+	if (expectedTokenType && payload.tokenType !== expectedTokenType) {
+		throw new Error('Invalid token type')
+	}
+
+	return payload
 }
 
-const verifyRefreshToken = token => {
-	const secret = getRefreshSecret()
-	ensureSecret(secret, 'JWT_REFRESH_SECRET or JWT_SECRET')
-	return jwt.verify(token, secret)
-}
+const verifyAccessToken = token => verifyToken(token, { expectedTokenType: 'access' })
+const verifyRefreshToken = token => verifyToken(token, { expectedTokenType: 'refresh' })
 
 module.exports = {
+	JWT_ALGORITHM,
 	generateAccessToken,
 	generateRefreshToken,
 	generateStudentAccessToken,
+	verifyToken,
 	verifyAccessToken,
 	verifyRefreshToken,
 }

@@ -1,6 +1,6 @@
 const mongoose = require('mongoose')
 
-const allowedRoles = ['teacher', 'supporteacher', 'headteacher', 'admin', 'superadmin']
+const allowedRoles = ['teacher', 'supportTeacher', 'headteacher', 'admin', 'superadmin']
 
 const forbidenEntrySchema = new mongoose.Schema(
 	{
@@ -107,25 +107,6 @@ const userSchema = new mongoose.Schema(
 			type: locationSchema,
 			default: undefined,
 		},
-		faceDescriptor: {
-			type: [Number],
-			default: undefined,
-			select: false,
-			validate: {
-				validator: value => {
-					if (typeof value === 'undefined') {
-						return true
-					}
-
-					if (!Array.isArray(value) || value.length !== 128) {
-						return false
-					}
-
-					return value.every(number => Number.isFinite(number))
-				},
-				message: 'faceDescriptor must contain exactly 128 numeric values',
-			},
-		},
 		faceIdEnabled: {
 			type: Boolean,
 			default: false,
@@ -142,10 +123,6 @@ const userSchema = new mongoose.Schema(
 			type: [forbidenEntrySchema],
 			default: [],
 		},
-		financeBalance: {
-			type: Number,
-			default: 0,
-		},
 		salary: {
 			type: Number,
 			default: 0,
@@ -160,7 +137,7 @@ userSchema.index({ location: '2dsphere' }, { sparse: true })
 const hideSensitiveFields = (doc, ret) => {
 	delete ret.password
 	delete ret.refreshToken
-	delete ret.faceDescriptor
+	delete ret.faceCredential
 	return ret
 }
 

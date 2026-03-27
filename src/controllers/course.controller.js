@@ -348,7 +348,7 @@ exports.getCourses = async (req, res) => {
 			page,
 			limit,
 			total,
-			courses: normalizedCourses,
+			data: normalizedCourses,
 		})
 	} catch (error) {
 		console.error('Get courses failed:', error)
@@ -634,8 +634,10 @@ exports.getCourseLessons = async (req, res) => {
 			.sort({ order: 1, createdAt: 1 })
 			.populate('documents.uploadedBy', 'fullname role phone')
 		return res.status(200).json({
+			page: 1,
+			limit: lessons.length,
 			total: lessons.length,
-			lessons: lessons.map(lesson => normalizeLessonResponse(lesson, req)),
+			data: lessons.map(lesson => normalizeLessonResponse(lesson, req)),
 		})
 	} catch (error) {
 		console.error('Get lessons failed:', error)
@@ -796,10 +798,10 @@ exports.getLessonDocuments = async (req, res) => {
 		}
 
 		return res.status(200).json({
-			courseId,
-			lessonId,
+			page: 1,
+			limit: (lesson.documents || []).length,
 			total: (lesson.documents || []).length,
-			documents: (lesson.documents || []).map(document => normalizeLessonDocument(document, req)),
+			data: (lesson.documents || []).map(document => normalizeLessonDocument(document, req)),
 		})
 	} catch (error) {
 		console.error('Get lesson documents failed:', error)
