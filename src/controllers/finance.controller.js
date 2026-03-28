@@ -9,7 +9,7 @@ const {
 
 const EMPLOYEE_ROLES = new Set([
 	'teacher',
-	'supportTeacher',
+	'supporteacher',
 	'headteacher',
 	'admin',
 	'superadmin',
@@ -20,8 +20,8 @@ const isPositiveNumber = value => Number.isFinite(value) && value > 0
 const normalizeRoleInput = value => {
 	const normalized = String(value || '').trim()
 	const lowered = normalized.toLowerCase()
-	if (lowered === 'supporteacher' || lowered === 'supportteacher') {
-		return 'supportTeacher'
+	if (lowered === 'supportteacher') {
+		return 'supporteacher'
 	}
 	return lowered
 }

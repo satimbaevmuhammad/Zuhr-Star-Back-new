@@ -27,8 +27,8 @@ const extractBearerToken = authHeader => {
 const normalizeRoleInput = value => {
 	const normalized = String(value || '').trim()
 	const lowered = normalized.toLowerCase()
-	if (lowered === 'supporteacher' || lowered === 'supportteacher') {
-		return 'supportTeacher'
+	if (lowered === 'supportteacher') {
+		return 'supporteacher'
 	}
 
 	return lowered
@@ -39,7 +39,7 @@ const canCreateRoleViaRegister = (actorRole, targetRole) => {
 		return false
 	}
 
-	return actorRole === 'superadmin' && ['teacher', 'supportTeacher', 'headteacher', 'admin'].includes(targetRole)
+	return actorRole === 'superadmin' && ['teacher', 'supporteacher', 'headteacher', 'admin'].includes(targetRole)
 }
 
 const buildRequestIdentity = payload => {

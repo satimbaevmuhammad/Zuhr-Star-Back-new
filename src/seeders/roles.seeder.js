@@ -11,7 +11,7 @@ const DEFAULT_ROLE_PERMISSIONS = [
 		permissions: ['profile:read', 'students:read', 'groups:read'],
 	},
 	{
-		name: 'supportTeacher',
+		name: 'supporteacher',
 		permissions: ['profile:read', 'students:read', 'groups:read'],
 	},
 	{

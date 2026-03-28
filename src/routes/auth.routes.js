@@ -18,7 +18,7 @@ const router = express.Router()
  *   post:
  *     tags: [Auth]
  *     summary: Register a user
- *     description: Protected. Only superadmin can create employees (teacher/supportTeacher/headteacher/admin). Returns the created user. To set Face ID at creation time, include faceDescriptor in the body.
+ *     description: Protected. Only superadmin can create employees (teacher/supporteacher/headteacher/admin). Returns the created user. To set Face ID at creation time, include faceDescriptor in the body.
  *     security:
  *       - bearerAuth: []
  *     requestBody:
@@ -53,7 +53,7 @@ const router = express.Router()
  *                 minLength: 8
  *               role:
  *                 type: string
- *                 enum: [teacher, supportTeacher, headteacher, admin]
+ *                 enum: [teacher, supporteacher, headteacher, admin]
  *               company:
  *                 type: string
  *               salary:
@@ -284,7 +284,7 @@ router.get('/me', requireAuth, authController.me)
  *         name: role
  *         schema:
  *           type: string
- *           enum: [teacher, supportTeacher, headteacher, admin, superadmin]
+ *           enum: [teacher, supporteacher, headteacher, admin, superadmin]
  *     responses:
  *       200:
  *         description: User list
@@ -332,7 +332,7 @@ router.patch(
  *             properties:
  *               role:
  *                 type: string
- *                 enum: [teacher, supportTeacher, headteacher, admin, superadmin]
+ *                 enum: [teacher, supporteacher, headteacher, admin, superadmin]
  *     responses:
  *       200:
  *         description: Role updated successfully

@@ -1,6 +1,6 @@
 const mongoose = require('mongoose')
 
-const allowedRoles = ['teacher', 'supportTeacher', 'headteacher', 'admin', 'superadmin']
+const allowedRoles = ['teacher', 'supporteacher', 'headteacher', 'admin', 'superadmin']
 
 const forbidenEntrySchema = new mongoose.Schema(
 	{

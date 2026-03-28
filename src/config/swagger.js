@@ -67,7 +67,7 @@ const options = {
 							type: 'string',
 							enum: [
 								'teacher',
-								'supportTeacher',
+								'supporteacher',
 								'headteacher',
 								'admin',
 								'superadmin',

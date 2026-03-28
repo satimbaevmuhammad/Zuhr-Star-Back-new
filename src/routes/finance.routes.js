@@ -101,7 +101,7 @@ router.delete(
  *         name: role
  *         schema:
  *           type: string
- *           enum: [teacher, supportTeacher, headteacher, admin, superadmin]
+ *           enum: [teacher, supporteacher, headteacher, admin, superadmin]
  *         description: Filter by role
  *     responses:
  *       200:

@@ -24,7 +24,7 @@ const { invalidateRolePermissionsCache } = require('../middleware/auth.middlewar
 
 const ALLOWED_ROLES = new Set([
 	'teacher',
-	'supportTeacher',
+	'supporteacher',
 	'headteacher',
 	'admin',
 	'superadmin',
@@ -33,18 +33,18 @@ const ALLOWED_ROLES = new Set([
 const PHONE_PATTERN = /^\+?[0-9]{7,15}$/
 const SUPERADMIN_REGISTERABLE_ROLES = new Set([
 	'teacher',
-	'supportTeacher',
+	'supporteacher',
 	'headteacher',
 	'admin',
 ])
-const ADMIN_MANAGEABLE_ROLES = new Set(['teacher', 'supportTeacher', 'headteacher'])
+const ADMIN_MANAGEABLE_ROLES = new Set(['teacher', 'supporteacher', 'headteacher'])
 const FACE_DESCRIPTOR_LENGTH = 128
 
 const normalizeRoleInput = value => {
 	const normalized = String(value || '').trim()
 	const lowered = normalized.toLowerCase()
-	if (lowered === 'supporteacher' || lowered === 'supportteacher') {
-		return 'supportTeacher'
+	if (lowered === 'supportteacher') {
+		return 'supporteacher'
 	}
 
 	return lowered
@@ -874,7 +874,7 @@ exports.updateUserRole = async (req, res) => {
 			if (!ADMIN_MANAGEABLE_ROLES.has(role)) {
 				return res.status(403).json({
 					message:
-						'Admin can only assign teacher, supportTeacher, or headteacher roles',
+						'Admin can only assign teacher, supporteacher, or headteacher roles',
 				})
 			}
 

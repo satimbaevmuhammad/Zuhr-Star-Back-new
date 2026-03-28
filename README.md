@@ -93,7 +93,7 @@ BASE_URL=https://your-domain.com
 | Логин | `POST /api/auth/login` | `POST /api/students/login` |
 | `userType` в JWT | `employee` | `student` |
 | Refresh токен | Есть (7 дней) | Нет |
-| Роли | teacher, supportTeacher, headteacher, admin, superadmin | Нет |
+| Роли | teacher, supporteacher, headteacher, admin, superadmin | Нет |
 
 ### 4.2 JWT
 

@@ -371,7 +371,7 @@ router.post(
 	requireAuth,
 	// Support teachers + admin/superadmin can create; role check inside controller
 	// (controller verifies isExtraLessonSupport for non-admins).
-	allowRoles('admin', 'superadmin', 'supportTeacher', 'headteacher'),
+	allowRoles('admin', 'superadmin', 'supporteacher', 'headteacher'),
 	extraLessonController.createExtraLesson,
 )
 
