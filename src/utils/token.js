@@ -9,6 +9,7 @@ const JWT_ALGORITHM = 'HS256'
 const EMPLOYEE_ACCESS_EXPIRES_IN = '24h'
 const EMPLOYEE_REFRESH_EXPIRES_IN = '7d'
 const STUDENT_ACCESS_EXPIRES_IN = '24h'
+const STUDENT_REFRESH_EXPIRES_IN = '7d'
 
 const resolveSecret = () =>
 	process.env.JWT_SECRET || process.env.JWT_ACCESS_SECRET || process.env.JWT_REFRESH_SECRET
@@ -74,6 +75,17 @@ const generateStudentAccessToken = student => {
 	})
 }
 
+const generateStudentRefreshToken = student => {
+	const sub = resolveEntityId(student)
+	return signToken({
+		sub,
+		role: 'student',
+		userType: 'student',
+		tokenType: 'refresh',
+		expiresIn: STUDENT_REFRESH_EXPIRES_IN,
+	})
+}
+
 const verifyToken = (token, { expectedTokenType } = {}) => {
 	const secret = ensureSecret()
 	const payload = jwt.verify(token, secret, {
@@ -104,6 +116,7 @@ module.exports = {
 	generateAccessToken,
 	generateRefreshToken,
 	generateStudentAccessToken,
+	generateStudentRefreshToken,
 	verifyToken,
 	verifyAccessToken,
 	verifyRefreshToken,

@@ -77,6 +77,11 @@ const studentSchema = new mongoose.Schema(
 			select: false,
 			minlength: 8,
 		},
+		refreshToken: {
+			type: String,
+			default: null,
+			select: false,
+		},
 		balance: {
 			type: Number,
 			default: 0,
@@ -133,6 +138,7 @@ studentSchema.pre('validate', async function () {
 })
 const hideSensitiveFields = (doc, ret) => {
 	delete ret.password
+	delete ret.refreshToken
 	delete ret.balanceResetAt
 	return ret
 }

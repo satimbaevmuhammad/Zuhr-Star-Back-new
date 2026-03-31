@@ -4,10 +4,15 @@ const mongoose = require('mongoose')
 const Group = require('../model/group.model')
 const Student = require('../model/student.model')
 const { resetStudentBalancesIfNeeded } = require('../services/student-balance-reset.service')
-const { generateStudentAccessToken } = require('../utils/token')
+const {
+	generateStudentAccessToken,
+	generateStudentRefreshToken,
+	verifyRefreshToken,
+} = require('../utils/token')
 
 const PHONE_PATTERN = /^\+?[0-9]{7,15}$/
 const STUDENT_GROUP_STATUSES = ['active', 'paused', 'completed', 'left']
+const BCRYPT_HASH_PATTERN = /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/
 
 const sanitizeStudent = studentDocument => {
 	const obj = studentDocument?.toObject ? studentDocument.toObject() : { ...studentDocument }
@@ -16,38 +21,128 @@ const sanitizeStudent = studentDocument => {
 	return obj
 }
 
+const isBcryptHash = value =>
+	typeof value === 'string' && BCRYPT_HASH_PATTERN.test(value)
+
+const verifyAndUpgradeLegacyStudentPassword = async ({
+	student,
+	inputPassword,
+	studentPhone,
+}) => {
+	const storedPassword = String(student.password || '')
+	if (!storedPassword) {
+		return false
+	}
+
+	if (isBcryptHash(storedPassword)) {
+		return bcrypt.compare(inputPassword, storedPassword)
+	}
+
+	// Legacy fallback: older records may still contain plain-text passwords.
+	if (storedPassword !== inputPassword) {
+		return false
+	}
+
+	const hashedPassword = await bcrypt.hash(inputPassword, 12)
+	const updatePayload = { password: hashedPassword }
+	if (!student.studentPhone && studentPhone) {
+		updatePayload.studentPhone = studentPhone
+	}
+
+	await Student.updateOne(
+		{ _id: student._id },
+		{ $set: updatePayload },
+		{ runValidators: false },
+	)
+
+	student.password = hashedPassword
+	if (!student.studentPhone && studentPhone) {
+		student.studentPhone = studentPhone
+	}
+
+	return true
+}
+
 exports.loginStudent = async (req, res) => {
 	try {
-		const studentPhone = String(req.body.studentPhone || '').trim()
-		const password = req.body.password
+		const studentPhone = String(req.body.studentPhone || req.body.phone || '').trim()
+		const password = String(req.body.password || '')
 
 		if (!studentPhone || !password) {
 			return res.status(400).json({ message: 'studentPhone and password required' })
 		}
 
-		const student = await Student.findOne({ studentPhone }).select('+password')
+		const student = await Student.findOne({
+			$or: [{ studentPhone }, { phone: studentPhone }],
+		}).select('+password +refreshToken')
 		if (!student) {
 			return res.status(401).json({ message: 'Invalid credentials' })
 		}
 
-		if (!student.password) {
-			return res.status(401).json({ message: 'Invalid credentials' })
-		}
-
-		const isMatch = await bcrypt.compare(password, student.password)
+		const isMatch = await verifyAndUpgradeLegacyStudentPassword({
+			student,
+			inputPassword: password,
+			studentPhone,
+		})
 		if (!isMatch) {
 			return res.status(401).json({ message: 'Invalid credentials' })
 		}
 
 		const accessToken = generateStudentAccessToken(student)
+		const refreshToken = generateStudentRefreshToken(student)
+		student.refreshToken = refreshToken
+		await student.save({ validateBeforeSave: false })
 
 		return res.status(200).json({
 			accessToken,
+			refreshToken,
 			student: sanitizeStudent(student),
 		})
 	} catch (error) {
 		console.error('Student login failed:', error)
 		return res.status(500).json({ message: 'Internal server error' })
+	}
+}
+
+exports.refreshStudentToken = async (req, res) => {
+	try {
+		const refreshTokenInput = String(req.body.refreshToken || '').trim()
+		if (!refreshTokenInput) {
+			return res.status(400).json({ message: 'Refresh token is required' })
+		}
+
+		const refreshToken = refreshTokenInput.replace(/^Bearer\s+/i, '').trim()
+		const strictRefreshTokenMatch =
+			String(process.env.STRICT_REFRESH_TOKEN_MATCH || 'false')
+				.trim()
+				.toLowerCase() === 'true'
+
+		const payload = verifyRefreshToken(refreshToken)
+		if (payload.userType !== 'student') {
+			return res.status(401).json({ message: 'Invalid refresh token' })
+		}
+
+		const student = await Student.findById(payload.sub || payload.id).select('+refreshToken')
+		if (!student || !student.refreshToken) {
+			return res.status(401).json({ message: 'Invalid refresh token' })
+		}
+
+		if (strictRefreshTokenMatch && student.refreshToken !== refreshToken) {
+			return res.status(401).json({ message: 'Refresh token mismatch' })
+		}
+
+		const newAccessToken = generateStudentAccessToken(student)
+		const newRefreshToken = generateStudentRefreshToken(student)
+		student.refreshToken = newRefreshToken
+		await student.save({ validateBeforeSave: false })
+
+		return res.status(200).json({
+			accessToken: newAccessToken,
+			refreshToken: newRefreshToken,
+		})
+	} catch (error) {
+		console.error('Student refresh token failed:', error)
+		return res.status(401).json({ message: 'Invalid or expired refresh token' })
 	}
 }
 

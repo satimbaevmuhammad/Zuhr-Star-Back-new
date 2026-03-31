@@ -33,6 +33,31 @@ const router = express.Router()
  */
 router.post('/login', studentController.loginStudent)
 
+/**
+ * @swagger
+ * /api/students/refresh-token:
+ *   post:
+ *     tags: [Students]
+ *     summary: Refresh student access token
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [refreshToken]
+ *             properties:
+ *               refreshToken:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Tokens refreshed
+ *       401:
+ *         description: Invalid or expired refresh token
+ */
+router.post('/refresh-token', studentController.refreshStudentToken)
+
 router.use(requireAuth)
 
 /**
