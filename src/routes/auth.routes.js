@@ -86,7 +86,6 @@ const router = express.Router()
 router.post(
 	'/register',
 	uploadAvatar,
-	requireRegisterPermission,
 	authController.register,
 )
 
