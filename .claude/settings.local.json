@@ -12,7 +12,9 @@
       "Bash(grep -n \"uploadLessonDocument\\\\|uploadAvatar\\\\|uploadHomeworkAttachment\" /d/Desktop/BackZuhr/src/routes/*.js)",
       "Bash(node -e \"const m = require\\(''multer''\\); console.log\\(m.version || require\\(''./node_modules/multer/package.json''\\).version\\)\")",
       "Bash(node -e \":*)",
-      "Bash(ls /d/Desktop/BackZuhr/.env*)"
+      "Bash(ls /d/Desktop/BackZuhr/.env*)",
+      "Bash(find /d/Desktop/BackZuhr -type f -name *.py)",
+      "Bash(find /d/Desktop/BackZuhr/src -type f -name *.js -o -name *.jsx -o -name *.ts -o -name *.tsx)"
     ]
   }
 }

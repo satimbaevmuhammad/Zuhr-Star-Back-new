@@ -395,11 +395,15 @@ const canManageGroupAttendance = (user, group) => {
 	return (group.supportTeachers || []).some(teacherId => teacherId.toString() === userId)
 }
 
+const CHARGED_STATUSES = new Set(['present', 'late'])
+
 const upsertGroupAttendanceRecord = ({ group, studentId, date, status, note, markedBy }) => {
 	const dateKey = toDateKey(date)
 	const recordIndex = group.attendance.findIndex(item => {
 		return item.student.toString() === studentId && toDateKey(item.date) === dateKey
 	})
+
+	const previousStatus = recordIndex !== -1 ? group.attendance[recordIndex].status : null
 
 	const payload = {
 		student: studentId,
@@ -415,6 +419,18 @@ const upsertGroupAttendanceRecord = ({ group, studentId, date, status, note, mar
 	} else {
 		group.attendance[recordIndex] = payload
 	}
+
+	return { previousStatus }
+}
+
+const computeBalanceDelta = (previousStatus, newStatus, monthlyFee) => {
+	const costPerLesson = (monthlyFee || 0) / 12
+	const wasCharged = previousStatus !== null && CHARGED_STATUSES.has(previousStatus)
+	const shouldCharge = CHARGED_STATUSES.has(newStatus)
+
+	if (shouldCharge && !wasCharged) return -costPerLesson
+	if (!shouldCharge && wasCharged) return costPerLesson
+	return 0
 }
 
 const runBalanceResetSafely = async () => {
@@ -1470,9 +1486,10 @@ exports.upsertGroupAttendance = async (req, res) => {
 		}
 
 		const markedBy = req.user?._id
+		const balanceDeltas = []
 
 		for (const record of records) {
-			upsertGroupAttendanceRecord({
+			const { previousStatus } = upsertGroupAttendanceRecord({
 				group,
 				studentId: record.student,
 				date,
@@ -1480,9 +1497,21 @@ exports.upsertGroupAttendance = async (req, res) => {
 				note: record.note,
 				markedBy,
 			})
+			const delta = computeBalanceDelta(previousStatus, record.status, group.monthlyFee)
+			if (delta !== 0) {
+				balanceDeltas.push({ studentId: record.student, delta })
+			}
 		}
 
 		await group.save()
+
+		if (balanceDeltas.length > 0) {
+			await Promise.all(
+				balanceDeltas.map(({ studentId, delta }) =>
+					Student.findByIdAndUpdate(studentId, { $inc: { balance: delta } }),
+				),
+			)
+		}
 
 		const updatedGroup = await Group.findById(groupId)
 			.populate('teacher', 'fullname role phone')
@@ -1569,7 +1598,7 @@ exports.markGroupAttendanceStudent = async (req, res) => {
 			})
 		}
 
-		upsertGroupAttendanceRecord({
+		const { previousStatus } = upsertGroupAttendanceRecord({
 			group,
 			studentId,
 			date: parsedPayload.date,
@@ -1579,6 +1608,11 @@ exports.markGroupAttendanceStudent = async (req, res) => {
 		})
 
 		await group.save()
+
+		const balanceDelta = computeBalanceDelta(previousStatus, parsedPayload.status, group.monthlyFee)
+		if (balanceDelta !== 0) {
+			await Student.findByIdAndUpdate(studentId, { $inc: { balance: balanceDelta } })
+		}
 
 		const updatedGroup = await Group.findById(groupId)
 			.populate('teacher', 'fullname role phone')
