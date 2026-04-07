@@ -12,7 +12,7 @@ router.use(requireAuth)
  * /api/finance/transactions:
  *   get:
  *     tags: [Finance]
- *     summary: List all employee finance transactions (bonuses and fines)
+ *     summary: List all finance transactions
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -22,11 +22,22 @@ router.use(requireAuth)
  *           type: string
  *         description: Filter by employee
  *       - in: query
+ *         name: studentId
+ *         schema:
+ *           type: string
+ *         description: Filter by student
+ *       - in: query
  *         name: type
  *         schema:
  *           type: string
- *           enum: [bonus, fine]
+ *           enum: [salary, salary_update, bonus, fine, student_payment]
  *         description: Filter by transaction type
+ *       - in: query
+ *         name: month
+ *         schema:
+ *           type: string
+ *           example: "2025-04"
+ *         description: Filter by month (YYYY-MM)
  *       - in: query
  *         name: page
  *         schema:
@@ -41,7 +52,7 @@ router.use(requireAuth)
  *       200:
  *         description: Paginated transaction list
  */
-router.get('/transactions', allowPermissions('users:read'), financeController.listTransactions)
+router.get('/transactions', allowRoles('teacher', 'supporteacher', 'headteacher', 'admin', 'superadmin'), financeController.listTransactions)
 
 /**
  * @swagger
@@ -83,6 +94,12 @@ router.delete(
  *       - bearerAuth: []
  *     parameters:
  *       - in: query
+ *         name: month
+ *         schema:
+ *           type: string
+ *           example: "2025-04"
+ *         description: Filter finance summary to a single month (YYYY-MM)
+ *       - in: query
  *         name: page
  *         schema:
  *           type: integer
@@ -107,15 +124,15 @@ router.delete(
  *       200:
  *         description: Paginated employee list
  */
-router.get('/employees', allowPermissions('users:read'), financeController.listEmployees)
+router.get('/employees', allowRoles('teacher', 'supporteacher', 'headteacher', 'admin', 'superadmin'), financeController.listEmployees)
 
 /**
  * @swagger
  * /api/finance/employees/{employeeId}:
  *   get:
  *     tags: [Finance]
- *     summary: Get finance summary for a specific employee
- *     description: Returns the employee's current balance, total bonuses, total fines, and their list of forbidden behavior violations.
+ *     summary: Get per-month finance history for a specific employee
+ *     description: Returns the employee's finance breakdown grouped by month (salary, bonuses, fines, net per month), sorted by month descending.
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -126,15 +143,69 @@ router.get('/employees', allowPermissions('users:read'), financeController.listE
  *           type: string
  *     responses:
  *       200:
- *         description: Employee finance summary
+ *         description: Employee monthly finance history
  *       404:
  *         description: Employee not found
  */
 router.get(
 	'/employees/:employeeId',
-	allowPermissions('users:read'),
+	allowRoles('teacher', 'supporteacher', 'headteacher', 'admin', 'superadmin'),
 	validateObjectId('employeeId'),
 	financeController.getEmployeeFinanceSummary,
+)
+
+/**
+ * @swagger
+ * /api/finance/employees/{employeeId}/bonuses:
+ *   get:
+ *     tags: [Finance]
+ *     summary: List all bonus events for an employee
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: employeeId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Bonus event list sorted by month descending
+ *       404:
+ *         description: Employee not found
+ */
+router.get(
+	'/employees/:employeeId/bonuses',
+	allowRoles('teacher', 'supporteacher', 'headteacher', 'admin', 'superadmin'),
+	validateObjectId('employeeId'),
+	financeController.getEmployeeBonuses,
+)
+
+/**
+ * @swagger
+ * /api/finance/employees/{employeeId}/fines:
+ *   get:
+ *     tags: [Finance]
+ *     summary: List all fine events for an employee
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: employeeId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Fine event list sorted by month descending
+ *       404:
+ *         description: Employee not found
+ */
+router.get(
+	'/employees/:employeeId/fines',
+	allowRoles('teacher', 'supporteacher', 'headteacher', 'admin', 'superadmin'),
+	validateObjectId('employeeId'),
+	financeController.getEmployeeFines,
 )
 
 /**
@@ -164,6 +235,10 @@ router.get(
  *                 type: number
  *                 minimum: 0
  *                 example: 3000000
+ *               month:
+ *                 type: string
+ *                 example: "2025-04"
+ *                 description: Target month (YYYY-MM). Defaults to current month.
  *     responses:
  *       200:
  *         description: Salary updated
@@ -209,6 +284,10 @@ router.patch(
  *               reason:
  *                 type: string
  *                 example: Excellent performance this month
+ *               month:
+ *                 type: string
+ *                 example: "2025-04"
+ *                 description: Target month (YYYY-MM). Defaults to current month.
  *     responses:
  *       201:
  *         description: Bonus added
@@ -254,6 +333,10 @@ router.post(
  *               reason:
  *                 type: string
  *                 example: Late to work 3 times this week
+ *               month:
+ *                 type: string
+ *                 example: "2025-04"
+ *                 description: Target month (YYYY-MM). Defaults to current month.
  *     responses:
  *       201:
  *         description: Fine added
@@ -267,6 +350,109 @@ router.post(
 	allowRoles('admin', 'superadmin', 'headteacher'),
 	validateObjectId('employeeId'),
 	financeController.addFine,
+)
+
+/**
+ * @swagger
+ * /api/finance/students/payments:
+ *   get:
+ *     tags: [Finance]
+ *     summary: List all student payment events
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: month
+ *         schema:
+ *           type: string
+ *           example: "2025-04"
+ *         description: Filter by month (YYYY-MM)
+ *       - in: query
+ *         name: groupId
+ *         schema:
+ *           type: string
+ *         description: Filter by group
+ *     responses:
+ *       200:
+ *         description: Student payment list
+ */
+router.get('/students/payments', allowRoles('teacher', 'supporteacher', 'headteacher', 'admin', 'superadmin'), financeController.listStudentPayments)
+
+/**
+ * @swagger
+ * /api/finance/students/{studentId}/payment:
+ *   post:
+ *     tags: [Finance]
+ *     summary: Record a payment for a student
+ *     description: Creates a student_payment event and increments the student's balance.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: studentId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [amount]
+ *             properties:
+ *               amount:
+ *                 type: number
+ *                 minimum: 0.01
+ *                 example: 500000
+ *               month:
+ *                 type: string
+ *                 example: "2025-04"
+ *                 description: Target month (YYYY-MM). Defaults to current month.
+ *               groupId:
+ *                 type: string
+ *                 description: Optional group the payment is for
+ *               note:
+ *                 type: string
+ *                 example: Monthly tuition fee
+ *     responses:
+ *       201:
+ *         description: Payment recorded
+ *       400:
+ *         description: Validation failed
+ *       404:
+ *         description: Student not found
+ */
+router.post(
+	'/students/:studentId/payment',
+	validateObjectId('studentId'),
+	financeController.addStudentPayment,
+)
+
+/**
+ * @swagger
+ * /api/finance/students/{studentId}/payments:
+ *   get:
+ *     tags: [Finance]
+ *     summary: List all payment events for a student
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: studentId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Student payment history sorted by month descending
+ *       404:
+ *         description: Student not found
+ */
+router.get(
+	'/students/:studentId/payments',
+	validateObjectId('studentId'),
+	financeController.getStudentPayments,
 )
 
 module.exports = router

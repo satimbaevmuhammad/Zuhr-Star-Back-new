@@ -421,13 +421,6 @@ exports.register = async (req, res) => {
 			)
 		}
 
-		if (typeof faceDescriptorInput !== 'undefined' && !faceDescriptor) {
-			return fail(
-				400,
-				`descriptor must be an array with exactly ${FACE_DESCRIPTOR_LENGTH} numeric values`,
-			)
-		}
-
 		const parsedDate = new Date(dateOfBirth)
 		if (Number.isNaN(parsedDate.getTime())) {
 			return fail(400, 'Invalid dateOfBirth value')
