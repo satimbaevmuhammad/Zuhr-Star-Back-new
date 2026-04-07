@@ -51,8 +51,8 @@ router.use(requireAuth)
  *       409:
  *         description: Rule name already exists
  */
-router.get('/rules', allowPermissions('users:read'), forbiddenController.listRules)
-router.post('/rules', allowRoles('admin', 'superadmin'), forbiddenController.createRule)
+router.get('/rules', forbiddenController.listRules)
+router.post('/rules', forbiddenController.createRule)
 
 /**
  * @swagger
@@ -103,18 +103,8 @@ router.post('/rules', allowRoles('admin', 'superadmin'), forbiddenController.cre
  *       404:
  *         description: Rule not found
  */
-router.patch(
-	'/rules/:ruleId',
-	allowRoles('admin', 'superadmin'),
-	validateObjectId('ruleId'),
-	forbiddenController.updateRule,
-)
-router.delete(
-	'/rules/:ruleId',
-	allowRoles('admin', 'superadmin'),
-	validateObjectId('ruleId'),
-	forbiddenController.deleteRule,
-)
+router.patch('/rules/:ruleId', validateObjectId('ruleId'), forbiddenController.updateRule)
+router.delete('/rules/:ruleId', validateObjectId('ruleId'), forbiddenController.deleteRule)
 
 // ─── VIOLATIONS ───────────────────────────────────────────────────────────────
 
@@ -189,12 +179,8 @@ router.delete(
  *       404:
  *         description: Employee or rule not found
  */
-router.get('/violations', allowPermissions('users:read'), forbiddenController.listViolations)
-router.post(
-	'/violations',
-	allowRoles('admin', 'superadmin', 'headteacher'),
-	forbiddenController.recordViolation,
-)
+router.get('/violations', forbiddenController.listViolations)
+router.post('/violations', forbiddenController.recordViolation)
 
 /**
  * @swagger
@@ -216,11 +202,6 @@ router.post(
  *       404:
  *         description: Violation not found
  */
-router.delete(
-	'/violations/:violationId',
-	allowRoles('admin', 'superadmin'),
-	validateObjectId('violationId'),
-	forbiddenController.deleteViolation,
-)
+router.delete('/violations/:violationId', validateObjectId('violationId'), forbiddenController.deleteViolation)
 
 module.exports = router
