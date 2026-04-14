@@ -1,11 +1,15 @@
 const express = require('express')
 const groupController = require('../controllers/group.controller')
-const { requireAuth, allowPermissions } = require('../middleware/auth.middleware')
+const {
+	requireAnyAuth,
+	allowPermissions,
+	allowPermissionsOrStudent,
+} = require('../middleware/auth.middleware')
 const validateObjectId = require('../middleware/validateObjectId')
 
 const router = express.Router()
 
-router.use(requireAuth)
+router.use(requireAnyAuth)
 
 /**
  * @swagger
@@ -64,7 +68,7 @@ router.use(requireAuth)
  *       409:
  *         description: Duplicate group
  */
-router.get('/', allowPermissions('groups:read'), groupController.getGroups)
+router.get('/', allowPermissionsOrStudent('groups:read'), groupController.getGroups)
 router.post('/', allowPermissions('groups:manage'), groupController.createGroup)
 
 /**
@@ -137,7 +141,7 @@ router.post('/', allowPermissions('groups:manage'), groupController.createGroup)
  */
 router.get(
 	'/:groupId',
-	allowPermissions('groups:read'),
+	allowPermissionsOrStudent('groups:read'),
 	validateObjectId('groupId'),
 	groupController.getGroupById,
 )
@@ -200,7 +204,7 @@ router.delete(
  */
 router.get(
 	'/:groupId/students',
-	allowPermissions('groups:read', 'students:read'),
+	allowPermissionsOrStudent('groups:read', 'students:read'),
 	validateObjectId('groupId'),
 	groupController.getGroupStudents,
 )

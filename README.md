@@ -177,8 +177,11 @@ This keeps employee/admin flows separate from student flows.
 
 - `requireAuth` -> employee token only
 - `requireStudentAuth` -> student token only
+- `requireAnyAuth` -> employee or student token
 - `allowRoles(...roles)` -> static role allow-list
 - `allowPermissions(...perms)` -> checks dynamic role permissions from DB
+- `allowPermissionsOrStudent(...perms)` -> employee must pass permissions, student is allowed
+- `allowStudentSelfOrPermissions(...perms)` -> employee must pass permissions, student can only access own `:studentId`
 
 ### RBAC Defaults (Seeded On DB Connect)
 
@@ -350,20 +353,20 @@ Base path prefix is `/api`.
 - `POST /students/refresh-token`
 - `GET /students`
 - `POST /students`
-- `GET /students/:studentId`
+- `GET /students/:studentId` (employee with permission or same student via student token)
 - `PATCH /students/:studentId`
 - `DELETE /students/:studentId`
-- `GET /students/:studentId/groups`
+- `GET /students/:studentId/groups` (employee with permission or same student via student token)
 - `POST /students/:studentId/reward-coins`
 
 ### Groups (`/groups`)
 
-- `GET /groups`
+- `GET /groups` (employee with permission or student token)
 - `POST /groups`
-- `GET /groups/:groupId`
+- `GET /groups/:groupId` (employee with permission or student token)
 - `PATCH /groups/:groupId`
 - `DELETE /groups/:groupId`
-- `GET /groups/:groupId/students`
+- `GET /groups/:groupId/students` (employee with permission or student token)
 - `POST /groups/:groupId/students/:studentId`
 - `DELETE /groups/:groupId/students/:studentId`
 - `POST /groups/:groupId/attendance`
@@ -371,18 +374,18 @@ Base path prefix is `/api`.
 
 ### Courses (`/courses`)
 
-- `GET /courses`
+- `GET /courses` (employee with permission or student token)
 - `POST /courses`
-- `GET /courses/:courseId`
+- `GET /courses/:courseId` (employee with permission or student token)
 - `PATCH /courses/:courseId`
 - `DELETE /courses/:courseId`
-- `GET /courses/:courseId/lessons`
+- `GET /courses/:courseId/lessons` (employee with permission or student token)
 - `POST /courses/:courseId/lessons`
 - `PATCH /courses/:courseId/lessons/:lessonId`
 - `DELETE /courses/:courseId/lessons/:lessonId`
-- `GET /courses/:courseId/lessons/:lessonId/documents`
+- `GET /courses/:courseId/lessons/:lessonId/documents` (employee with permission or student token)
 - `DELETE /courses/:courseId/lessons/:lessonId/documents/:documentId`
-- `GET /courses/:courseId/lessons/:lessonId/homework`
+- `GET /courses/:courseId/lessons/:lessonId/homework` (employee with permission or student token)
 - `PATCH /courses/:courseId/lessons/:lessonId/homework`
 - `POST /courses/:courseId/lessons/:lessonId/homework/documents`
 - `DELETE /courses/:courseId/lessons/:lessonId/homework/documents/:documentId`
@@ -391,7 +394,9 @@ Base path prefix is `/api`.
 ### Homework (`/homework`)
 
 - `GET /homework/lessons/:lessonId` (student token; returns that student's own submission summary)
+- `GET /homework/lesson/:lessonId` (student token; backward-compatible alias of endpoint above)
 - `POST /homework/lessons/:lessonId/submissions` (student token)
+- `POST /homework/lesson/:lessonId/submissions` (student token; backward-compatible alias)
 - `GET /homework/groupmates/grades` (student token; active groupmates' graded homework results)
 - `GET /homework/submissions` (employee token; non-admin users limited to their own groups)
 - `PATCH /homework/submissions/:submissionId/grade` (employee token; admin/headteacher/superadmin or assigned teacher/support teacher)

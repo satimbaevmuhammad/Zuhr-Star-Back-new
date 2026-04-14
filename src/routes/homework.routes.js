@@ -42,6 +42,14 @@ router.get(
 	homeworkController.getStudentHomework,
 )
 
+// Backward-compatible singular alias for student homework read endpoint.
+router.get(
+	'/lesson/:lessonId',
+	requireStudentAuth,
+	validateObjectId('lessonId'),
+	homeworkController.getStudentHomework,
+)
+
 /**
  * @swagger
  * /api/homework/lessons/{lessonId}/submissions:
@@ -85,6 +93,15 @@ router.get(
  */
 router.post(
 	'/lessons/:lessonId/submissions',
+	requireStudentAuth,
+	validateObjectId('lessonId'),
+	uploadHomeworkAttachment,
+	homeworkController.submitStudentHomework,
+)
+
+// Backward-compatible singular alias for student homework submission endpoint.
+router.post(
+	'/lesson/:lessonId/submissions',
 	requireStudentAuth,
 	validateObjectId('lessonId'),
 	uploadHomeworkAttachment,

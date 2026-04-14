@@ -144,6 +144,37 @@ const requireStudentAuth = async (req, res, next) => {
 	})
 }
 
+const requireAnyAuth = async (req, res, next) => {
+	return verifyToken(req, res, async () => {
+		try {
+			if (req.user.userType === 'employee') {
+				const userDocument = await User.findById(req.user.id).select('+refreshToken')
+				if (!userDocument) {
+					return res.status(401).json({ message: 'Invalid token user' })
+				}
+
+				req.userDocument = userDocument
+				req.user.role = userDocument.role
+				return next()
+			}
+
+			if (req.user.userType === 'student') {
+				const student = await Student.findById(req.user.id)
+				if (!student) {
+					return res.status(401).json({ message: 'Invalid token student' })
+				}
+
+				req.student = student
+				return next()
+			}
+
+			return res.status(401).json({ message: 'Invalid token user type' })
+		} catch (error) {
+			return res.status(401).json({ message: 'Invalid or expired access token' })
+		}
+	})
+}
+
 const allowRoles = (...roles) => {
 	return (req, res, next) => {
 		if (!req.user || req.user.userType !== 'employee' || !roles.includes(req.user.role)) {
@@ -156,6 +187,71 @@ const allowRoles = (...roles) => {
 const allowPermissions = (...permissions) => {
 	return async (req, res, next) => {
 		if (!req.user || req.user.userType !== 'employee') {
+			return res.status(401).json({ message: 'Unauthorized' })
+		}
+
+		try {
+			for (const permission of permissions) {
+				const allowed = await hasPermission(req.user.role, permission)
+				if (!allowed) {
+					return res.status(403).json({ message: 'Forbidden: insufficient permissions' })
+				}
+			}
+
+			return next()
+		} catch (error) {
+			return res.status(500).json({ message: 'Failed to load role permissions' })
+		}
+	}
+}
+
+const allowPermissionsOrStudent = (...permissions) => {
+	return async (req, res, next) => {
+		if (!req.user) {
+			return res.status(401).json({ message: 'Unauthorized' })
+		}
+
+		if (req.user.userType === 'student') {
+			return next()
+		}
+
+		if (req.user.userType !== 'employee') {
+			return res.status(401).json({ message: 'Unauthorized' })
+		}
+
+		try {
+			for (const permission of permissions) {
+				const allowed = await hasPermission(req.user.role, permission)
+				if (!allowed) {
+					return res.status(403).json({ message: 'Forbidden: insufficient permissions' })
+				}
+			}
+
+			return next()
+		} catch (error) {
+			return res.status(500).json({ message: 'Failed to load role permissions' })
+		}
+	}
+}
+
+const allowStudentSelfOrPermissions = (...permissions) => {
+	return async (req, res, next) => {
+		if (!req.user) {
+			return res.status(401).json({ message: 'Unauthorized' })
+		}
+
+		if (req.user.userType === 'student') {
+			const routeStudentId = String(req.params.studentId || '').trim()
+			if (routeStudentId && routeStudentId === req.user.id) {
+				return next()
+			}
+
+			return res.status(403).json({
+				message: 'Forbidden: students can only access their own data',
+			})
+		}
+
+		if (req.user.userType !== 'employee') {
 			return res.status(401).json({ message: 'Unauthorized' })
 		}
 
@@ -240,8 +336,11 @@ module.exports = {
 	verifyToken,
 	requireAuth,
 	requireStudentAuth,
+	requireAnyAuth,
 	allowRoles,
 	allowPermissions,
+	allowPermissionsOrStudent,
+	allowStudentSelfOrPermissions,
 	requireRegisterPermission,
 	invalidateRolePermissionsCache,
 }

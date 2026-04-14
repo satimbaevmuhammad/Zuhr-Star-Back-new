@@ -1,7 +1,11 @@
 const express = require('express')
 
 const studentController = require('../controllers/student.controller')
-const { requireAuth, allowPermissions } = require('../middleware/auth.middleware')
+const {
+	requireAnyAuth,
+	allowPermissions,
+	allowStudentSelfOrPermissions,
+} = require('../middleware/auth.middleware')
 const validateObjectId = require('../middleware/validateObjectId')
 
 const router = express.Router()
@@ -58,7 +62,7 @@ router.post('/login', studentController.loginStudent)
  */
 router.post('/refresh-token', studentController.refreshStudentToken)
 
-router.use(requireAuth)
+router.use(requireAnyAuth)
 
 /**
  * @swagger
@@ -123,7 +127,7 @@ router.get('/', allowPermissions('students:read'), studentController.getStudents
  */
 router.get(
 	'/:studentId/groups',
-	allowPermissions('students:read', 'groups:read'),
+	allowStudentSelfOrPermissions('students:read', 'groups:read'),
 	validateObjectId('studentId'),
 	studentController.getStudentGroups,
 )
@@ -187,7 +191,7 @@ router.post(
  */
 router.get(
 	'/:studentId',
-	allowPermissions('students:read'),
+	allowStudentSelfOrPermissions('students:read'),
 	validateObjectId('studentId'),
 	studentController.getStudentById,
 )

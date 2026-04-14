@@ -1,7 +1,12 @@
 const express = require('express')
 
 const courseController = require('../controllers/course.controller')
-const { requireAuth, allowPermissions, allowRoles } = require('../middleware/auth.middleware')
+const {
+	requireAnyAuth,
+	allowPermissions,
+	allowPermissionsOrStudent,
+	allowRoles,
+} = require('../middleware/auth.middleware')
 const validateObjectId = require('../middleware/validateObjectId')
 const {
 	uploadLessonDocument,
@@ -10,7 +15,7 @@ const {
 
 const router = express.Router()
 
-router.use(requireAuth)
+router.use(requireAnyAuth)
 
 /**
  * @swagger
@@ -64,7 +69,7 @@ router.use(requireAuth)
  *       409:
  *         description: Duplicate course
  */
-router.get('/', allowPermissions('groups:read'), courseController.getCourses)
+router.get('/', allowPermissionsOrStudent('groups:read'), courseController.getCourses)
 router.post('/', allowPermissions('groups:manage'), courseController.createCourse)
 
 /**
@@ -141,7 +146,7 @@ router.post('/', allowPermissions('groups:manage'), courseController.createCours
  */
 router.get(
 	'/:courseId',
-	allowPermissions('groups:read'),
+	allowPermissionsOrStudent('groups:read'),
 	validateObjectId('courseId'),
 	courseController.getCourseById,
 )
@@ -230,7 +235,7 @@ router.delete(
  */
 router.get(
 	'/:courseId/lessons',
-	allowPermissions('groups:read'),
+	allowPermissionsOrStudent('groups:read'),
 	validateObjectId('courseId'),
 	courseController.getCourseLessons,
 )
@@ -369,7 +374,7 @@ router.delete(
  */
 router.get(
 	'/:courseId/lessons/:lessonId/documents',
-	allowPermissions('groups:read'),
+	allowPermissionsOrStudent('groups:read'),
 	validateObjectId('courseId', 'lessonId'),
 	courseController.getLessonDocuments,
 )
@@ -487,7 +492,7 @@ router.delete(
  */
 router.get(
 	'/:courseId/lessons/:lessonId/homework',
-	allowPermissions('groups:read'),
+	allowPermissionsOrStudent('groups:read'),
 	validateObjectId('courseId', 'lessonId'),
 	courseController.getLessonHomework,
 )
