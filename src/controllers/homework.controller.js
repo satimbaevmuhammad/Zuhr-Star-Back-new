@@ -247,6 +247,43 @@ const canGradeSubmission = async (user, submission) => {
 	return (group.supportTeachers || []).some(teacherId => teacherId.toString() === userId)
 }
 
+const getSafeGroupSubmissions = async ({ lessonId, groupId }) => {
+	if (!groupId) {
+		return []
+	}
+
+	const activeStudents = await Student.find({
+		groups: { $elemMatch: { group: groupId, status: 'active' } },
+	})
+		.select('_id')
+		.lean()
+
+	const activeStudentIds = activeStudents.map(student => student._id).filter(Boolean)
+	if (activeStudentIds.length === 0) {
+		return []
+	}
+
+	const groupSubmissions = await HomeworkSubmission.find({
+		lesson: lessonId,
+		student: { $in: activeStudentIds },
+	})
+		.populate('student', 'name fullname _id')
+		.select('student status score submittedAt')
+		.lean()
+
+	return groupSubmissions
+		.map(submission => ({
+			studentId: submission?.student?._id ? String(submission.student._id) : '',
+			studentName: String(
+				submission?.student?.name || submission?.student?.fullname || '',
+			).trim(),
+			status: submission?.status || 'submitted',
+			score: typeof submission?.score === 'number' ? submission.score : null,
+			submittedAt: submission?.submittedAt || null,
+		}))
+		.filter(submission => Boolean(submission.studentId))
+} // FIX [7]: Add safe group grade list for student homework view without exposing private payload fields
+
 exports.getStudentHomework = async (req, res) => {
 	try {
 		const lessonId = req.params.lessonId
@@ -275,6 +312,10 @@ exports.getStudentHomework = async (req, res) => {
 			return res.status(403).json({ message: groupResult.error })
 		}
 
+		const groupSubmissions = groupResult?.group?._id
+			? await getSafeGroupSubmissions({ lessonId, groupId: groupResult.group._id })
+			: []
+
 		const unlockCheck = await ensureHomeworkUnlocked({
 			studentId: req.student._id,
 			lesson,
@@ -284,7 +325,7 @@ exports.getStudentHomework = async (req, res) => {
 		const submission = await HomeworkSubmission.findOne({
 			lesson: lessonId,
 			student: req.student._id,
-		}).select('status score attemptsCount checkedAt submittedAt')
+		}).select('status score attemptsCount checkedAt submittedAt history') // FIX [6]: Return student submission history in homework lesson response
 
 		if (!unlockCheck.ok) {
 			return res.status(200).json({
@@ -292,6 +333,7 @@ exports.getStudentHomework = async (req, res) => {
 				courseId: lesson.course,
 				homework: omitHomeworkDocumentUrls(normalizeHomeworkAssignment(lesson, req)),
 				submission: submission || null,
+				groupSubmissions,
 				groupId: groupResult.group._id,
 				isBlocked: true,
 				blockedReason: 'PRIOR_HOMEWORK_PENDING',
@@ -304,6 +346,7 @@ exports.getStudentHomework = async (req, res) => {
 			courseId: lesson.course,
 			homework: normalizeHomeworkAssignment(lesson, req),
 			submission: submission || null,
+			groupSubmissions,
 			groupId: groupResult.group._id,
 			isBlocked: false,
 			blockedReason: null,
@@ -402,6 +445,21 @@ exports.submitStudentHomework = async (req, res) => {
 				group: groupResult.group._id,
 			})
 		} else {
+			if (!Array.isArray(submission.history)) {
+				submission.history = []
+			}
+			submission.history.push({
+				description: String(submission.description || '').trim(),
+				links: Array.isArray(submission.links) ? [...submission.links] : [],
+				documents: Array.isArray(submission.documents)
+					? submission.documents.map(document => ({
+						name: String(document.originalName || document.filename || '').trim(),
+						url: String(document.url || '').trim(),
+					}))
+					: [],
+				submittedAt: submission.submittedAt || new Date(),
+			}) // FIX [5]: Preserve previous top-level submission payload in history before resubmit overwrite
+
 			for (const document of submission.documents || []) {
 				const filename = String(document.filename || '').trim()
 				if (filename) {
@@ -416,6 +474,7 @@ exports.submitStudentHomework = async (req, res) => {
 			submission.description = ''
 		}
 
+		submission.lesson = lessonId // FIX [5]: Always bind submission record to current lesson on create/resubmit
 		submission.status = 'submitted'
 		submission.score = null
 		submission.checkedBy = null

@@ -591,8 +591,8 @@ exports.createCourseLesson = async (req, res) => {
 		const lesson = await Lesson.create(payload)
 
 		await Promise.all([
-			Course.updateOne({ _id: courseId }, { $addToSet: { methodology: lesson._id } }),
-			Group.updateMany({ courseRef: courseId }, { $addToSet: { lessons: lesson._id } }),
+			Course.updateOne({ _id: courseId }, { $push: { methodology: lesson._id } }),
+			Group.updateMany({ courseRef: courseId }, { $push: { lessons: lesson._id } }), // FIX [2]: Push newly created lesson into every linked group's lessons list
 		])
 
 		return res.status(201).json({
@@ -755,7 +755,7 @@ exports.deleteCourseLesson = async (req, res) => {
 
 		await Promise.all([
 			Course.updateOne({ _id: courseId }, { $pull: { methodology: lesson._id } }),
-			Group.updateMany({ courseRef: courseId }, { $pull: { lessons: lesson._id } }),
+			Group.updateMany({ courseRef: courseId }, { $pull: { lessons: lessonId } }), // FIX [3]: Pull deleted lesson from every linked group's lessons list
 		])
 
 		const lessonDocuments = [

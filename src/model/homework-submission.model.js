@@ -39,6 +39,45 @@ const submissionDocumentSchema = new mongoose.Schema(
 	{ _id: true },
 )
 
+const submissionHistoryDocumentSchema = new mongoose.Schema(
+	{
+		name: {
+			type: String,
+			trim: true,
+			maxlength: 255,
+		},
+		url: {
+			type: String,
+			trim: true,
+			maxlength: 500,
+		},
+	},
+	{ _id: false },
+)
+
+const submissionHistorySchema = new mongoose.Schema(
+	{
+		description: {
+			type: String,
+			trim: true,
+			maxlength: 2000,
+		},
+		links: {
+			type: [String],
+			default: [],
+		},
+		documents: {
+			type: [submissionHistoryDocumentSchema],
+			default: [],
+		},
+		submittedAt: {
+			type: Date,
+			default: Date.now,
+		},
+	},
+	{ _id: false },
+)
+
 const homeworkSubmissionSchema = new mongoose.Schema(
 	{
 		lesson: {
@@ -93,6 +132,10 @@ const homeworkSubmissionSchema = new mongoose.Schema(
 			type: [submissionDocumentSchema],
 			default: [],
 		},
+		history: {
+			type: [submissionHistorySchema],
+			default: [],
+		}, // FIX [4]: Add submission history snapshots while keeping latest payload fields at top level
 		status: {
 			type: String,
 			enum: ['submitted', 'approved'],

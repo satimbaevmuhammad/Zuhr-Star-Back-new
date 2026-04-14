@@ -926,24 +926,20 @@ exports.updateGroup = async (req, res) => {
 
 		if (hasCourseIdInput) {
 			const courseId = String(req.body.courseId || '').trim()
-			const fallbackCourseName = typeof req.body.course === 'undefined' ? group.course : req.body.course
-			const resolvedCourseLink = await resolveGroupCourseLink({
-				courseIdInput: courseId,
-				fallbackCourseName,
-			})
-			if (resolvedCourseLink.error) {
-				return res.status(resolvedCourseLink.statusCode || 400).json({
-					message: resolvedCourseLink.error,
-				})
+			if (!mongoose.isValidObjectId(courseId)) {
+				return res.status(400).json({ message: 'Invalid courseId' })
 			}
 
-			if (!resolvedCourseLink.courseName) {
-				return res.status(400).json({ message: 'course cannot be empty' })
+			const courseDocument = await Course.findById(courseId).select('_id name methodology')
+			if (!courseDocument) {
+				return res.status(404).json({ message: 'Course not found' })
 			}
 
-			group.course = resolvedCourseLink.courseName
-			group.courseRef = resolvedCourseLink.courseRef
-			group.lessons = resolvedCourseLink.lessons
+			group.courseRef = courseDocument._id
+			group.course = courseDocument.name
+			group.lessons = Array.isArray(courseDocument.methodology)
+				? [...courseDocument.methodology]
+				: [] // FIX [1]: Patch group course linking to always copy full methodology lessons array
 		} else if (typeof req.body.course !== 'undefined') {
 			const course = String(req.body.course || '').trim()
 			if (!course) {
@@ -951,7 +947,7 @@ exports.updateGroup = async (req, res) => {
 			}
 			group.course = course
 			group.courseRef = null
-			group.lessons = []
+			group.lessons = [] // FIX [1]: Patch group course unlinking to clear courseRef and lessons consistently
 		}
 
 		if (typeof req.body.level !== 'undefined') {

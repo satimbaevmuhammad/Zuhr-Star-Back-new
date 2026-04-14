@@ -33,6 +33,7 @@ The stack is Node.js + Express + MongoDB (Mongoose), with JWT authentication and
 - Course methodology management (courses -> lessons -> homework)
 - Group management with attendance and student membership lifecycle
 - Homework submission + grading with progression lock (previous lesson checks)
+- Grade visibility isolation (students can only see their own submission/score)
 - Finance as append-only ledger events (salary updates, bonuses, fines)
 - Forbidden-rule and employee-violation system with automatic financial impact
 - Extra lesson booking system with strict slot scheduling (UTC+5 model)
@@ -212,7 +213,17 @@ Default role permissions are defined in `src/seeders/roles.seeder.js`:
 - Group creation enforces odd/even scheduling patterns:
   - `odd` -> monday, wednesday, friday
   - `even` -> tuesday, thursday, saturday
-- Supports `courseRef` link to a course; lessons can auto-sync from course methodology
+- Group-to-course methodology attachment works in two modes:
+  - Linked mode (`courseId` provided):
+    - `courseRef` is set to the target course
+    - `group.course` is normalized from `course.name`
+    - `group.lessons` is auto-copied from `course.methodology`
+  - Manual mode (`courseId` omitted, plain `course` name used):
+    - `courseRef` is set to `null`
+    - `group.lessons` stays empty and is managed manually (no methodology sync)
+- On group update:
+  - Sending `courseId` relinks the group and refreshes `group.lessons` from that course methodology
+  - Sending only `course` (without `courseId`) detaches the group from the course and clears `group.lessons`
 - Attendance logic:
   - Only allowed during scheduled lesson window
   - Date must be today
@@ -224,19 +235,52 @@ Default role permissions are defined in `src/seeders/roles.seeder.js`:
 
 ### 8.4 Courses And Lessons
 
-- Course has `durationMonths` and implicit max lessons = `durationMonths * 12`
-- Lessons have strict incremental `order` per course
-- Course methodology stores ordered lesson IDs
-- Lesson and homework documents can be uploaded to `uploads/`
-- Rebuild endpoint resynchronizes methodology and linked group lesson lists
+- Course methodology model:
+  - `course.methodology` stores lesson ObjectIds
+  - duplicates are blocked
+  - max methodology size is `durationMonths * 12`
+- Lesson ordering model:
+  - lessons are unique by `(course, order)`
+  - lesson `order` is incremental within a course
+- Methodology sync behavior:
+  - `POST /courses/:courseId/lessons` creates a lesson, adds it to `course.methodology`, and adds the lesson to every `group.lessons` where `group.courseRef = courseId`
+  - `DELETE /courses/:courseId/lessons/:lessonId` removes that lesson from both `course.methodology` and all linked groups
+  - `POST /courses/:courseId/rebuild-methodology` rebuilds methodology from actual lessons (sorted by `order`) and force-syncs all linked groups' `lessons`
+- Homework is attached directly to the lesson entity:
+  - `lesson.homework` (description)
+  - `lesson.homeworkLinks` (array of links)
+  - `lesson.homeworkDocuments` (uploaded files)
+- Homework can be attached/updated by staff through:
+  - `POST /courses/:courseId/lessons` (when creating lesson)
+  - `PATCH /courses/:courseId/lessons/:lessonId` (general lesson update)
+  - `PATCH /courses/:courseId/lessons/:lessonId/homework` (homework-focused update)
+  - `POST /courses/:courseId/lessons/:lessonId/homework/documents` (homework file attachments)
 
 ### 8.5 Homework
 
-- Students fetch assignment by lesson if enrolled and unlocked
-- Unlock rule: previous homework-bearing lessons must be approved with score >= 70
-- Submissions support text, links, and file attachments
-- Teachers/admins can list and grade submissions
-- Grade >= 70 sets submission status to `approved`
+- Student access flow:
+  - student calls `GET /homework/lessons/:lessonId`
+  - system checks student is active in a matching group and enrolled in that lesson
+  - if multiple matching active groups exist, `groupId` must be provided
+- Homework unlock rule:
+  - previous lessons in the same course/group that contain homework must already be approved
+  - pass threshold is `score >= 70`
+  - if blocked, API returns `isBlocked: true` and `blockedByLessonId`
+- Submission model:
+  - one submission per `(lesson, student)` (unique index)
+  - student can resubmit until approved
+  - once approved, resubmission is blocked
+  - submission supports `description`, `links`, and file attachments
+- Grading model:
+  - score range: `0..100`
+  - `score >= 70` -> `status = approved`
+  - `score < 70` -> `status = submitted`
+  - grading metadata includes `checkedBy` and `checkedAt`
+- Grade visibility (important):
+  - Student can see only their own submission/score for a lesson through `GET /homework/lessons/:lessonId` (`submission.status`, `submission.score`, etc.)
+  - Student cannot see groupmates' grades
+  - Listing all submissions (`GET /homework/submissions`) and grading (`PATCH /homework/submissions/:submissionId/grade`) require employee auth
+  - Non-admin employees are additionally scoped to groups where they are assigned teacher or support teacher
 
 ### 8.6 Finance
 
@@ -346,10 +390,10 @@ Base path prefix is `/api`.
 
 ### Homework (`/homework`)
 
-- `GET /homework/lessons/:lessonId`
-- `POST /homework/lessons/:lessonId/submissions`
-- `GET /homework/submissions`
-- `PATCH /homework/submissions/:submissionId/grade`
+- `GET /homework/lessons/:lessonId` (student token; returns that student's own submission summary)
+- `POST /homework/lessons/:lessonId/submissions` (student token)
+- `GET /homework/submissions` (employee token; non-admin users limited to their own groups)
+- `PATCH /homework/submissions/:submissionId/grade` (employee token; admin/headteacher/superadmin or assigned teacher/support teacher)
 
 ### Finance (`/finance`)
 
