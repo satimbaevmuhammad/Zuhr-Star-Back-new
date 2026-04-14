@@ -16,6 +16,22 @@ const GROUP_TYPE_DAYS = Object.freeze({
 })
 
 const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/
+const ATTENDANCE_TIMEZONE_OFFSET_HOURS = 5
+const ATTENDANCE_TIMEZONE_OFFSET_MINUTES = ATTENDANCE_TIMEZONE_OFFSET_HOURS * 60
+
+const toAttendanceDateKey = value => {
+	const date = new Date(value)
+	if (Number.isNaN(date.getTime())) {
+		return ''
+	}
+
+	const localMs = date.getTime() + ATTENDANCE_TIMEZONE_OFFSET_MINUTES * 60 * 1000
+	const localDate = new Date(localMs)
+	const year = localDate.getUTCFullYear()
+	const month = String(localDate.getUTCMonth() + 1).padStart(2, '0')
+	const day = String(localDate.getUTCDate()).padStart(2, '0')
+	return `${year}-${month}-${day}`
+}
 
 const groupScheduleSchema = new mongoose.Schema(
 	{
@@ -243,10 +259,7 @@ const groupSchema = new mongoose.Schema(
 			validate: {
 				validator: value => {
 					const attendanceKeys = value.map(item => {
-						const attendanceDate = new Date(item.date)
-						const dateKey = Number.isNaN(attendanceDate.getTime())
-							? ''
-							: attendanceDate.toISOString().slice(0, 10)
+						const dateKey = toAttendanceDateKey(item.date)
 						return `${item.student.toString()}::${dateKey}`
 					})
 

@@ -22,6 +22,8 @@ const ATTENDANCE_STATUSES = ['present', 'absent', 'late', 'excused']
 const STUDENT_GROUP_STATUSES = ['active', 'paused', 'completed', 'left']
 const PRIVILEGED_ATTENDANCE_ROLES = new Set(['superadmin', 'admin', 'headteacher'])
 const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/
+const ATTENDANCE_TIMEZONE_OFFSET_HOURS = 5
+const ATTENDANCE_TIMEZONE_OFFSET_MINUTES = ATTENDANCE_TIMEZONE_OFFSET_HOURS * 60
 const COINS_PER_ACTIVE_STUDENT = 200
 const GROUP_TYPE_DAY_MAP = Object.freeze({
 	odd: ['monday', 'wednesday', 'friday'],
@@ -301,20 +303,25 @@ const parseGroupMembershipPayload = body => {
 	return { status, joinedAt, note }
 }
 
-const toDateKey = value => {
-	const date = new Date(value)
-	return Number.isNaN(date.getTime()) ? '' : date.toISOString().slice(0, 10)
-}
-
-const toLocalDateKey = value => {
+const toAttendanceLocalDate = value => {
 	const date = new Date(value)
 	if (Number.isNaN(date.getTime())) {
+		return null
+	}
+
+	const localMs = date.getTime() + ATTENDANCE_TIMEZONE_OFFSET_MINUTES * 60 * 1000
+	return new Date(localMs)
+}
+
+const toAttendanceDateKey = value => {
+	const localDate = toAttendanceLocalDate(value)
+	if (!localDate) {
 		return ''
 	}
 
-	const year = date.getFullYear()
-	const month = String(date.getMonth() + 1).padStart(2, '0')
-	const day = String(date.getDate()).padStart(2, '0')
+	const year = localDate.getUTCFullYear()
+	const month = String(localDate.getUTCMonth() + 1).padStart(2, '0')
+	const day = String(localDate.getUTCDate()).padStart(2, '0')
 	return `${year}-${month}-${day}`
 }
 
@@ -329,7 +336,12 @@ const parseTimeToMinutes = value => {
 }
 
 const getDayOfWeekName = date => {
-	return DAYS_OF_WEEK[(date.getDay() + 6) % DAYS_OF_WEEK.length]
+	const localDate = toAttendanceLocalDate(date)
+	if (!localDate) {
+		return null
+	}
+
+	return DAYS_OF_WEEK[(localDate.getUTCDay() + 6) % DAYS_OF_WEEK.length]
 }
 
 const isNowWithinLessonWindow = (group, now = new Date()) => {
@@ -338,7 +350,15 @@ const isNowWithinLessonWindow = (group, now = new Date()) => {
 	}
 
 	const dayOfWeek = getDayOfWeekName(now)
-	const nowMinutes = now.getHours() * 60 + now.getMinutes()
+	if (!dayOfWeek) {
+		return false
+	}
+
+	const localDate = toAttendanceLocalDate(now)
+	if (!localDate) {
+		return false
+	}
+	const nowMinutes = localDate.getUTCHours() * 60 + localDate.getUTCMinutes()
 
 	return group.schedule.some(scheduleItem => {
 		if (!scheduleItem || scheduleItem.dayOfWeek !== dayOfWeek) {
@@ -357,7 +377,7 @@ const isNowWithinLessonWindow = (group, now = new Date()) => {
 }
 
 const validateAttendanceWindow = ({ group, date, now = new Date() }) => {
-	if (toLocalDateKey(date) !== toLocalDateKey(now)) {
+	if (toAttendanceDateKey(date) !== toAttendanceDateKey(now)) {
 		return {
 			statusCode: 400,
 			message: 'Attendance date must be today',
@@ -398,9 +418,9 @@ const canManageGroupAttendance = (user, group) => {
 const CHARGED_STATUSES = new Set(['present', 'late'])
 
 const upsertGroupAttendanceRecord = ({ group, studentId, date, status, note, markedBy }) => {
-	const dateKey = toDateKey(date)
+	const dateKey = toAttendanceDateKey(date)
 	const recordIndex = group.attendance.findIndex(item => {
-		return item.student.toString() === studentId && toDateKey(item.date) === dateKey
+		return item.student.toString() === studentId && toAttendanceDateKey(item.date) === dateKey
 	})
 
 	const previousStatus = recordIndex !== -1 ? group.attendance[recordIndex].status : null
@@ -1629,7 +1649,7 @@ exports.markGroupAttendanceStudent = async (req, res) => {
 		const attendanceEntry = (updatedGroup.attendance || []).find(item => {
 			return (
 				item.student?._id?.toString?.() === studentId &&
-				toDateKey(item.date) === toDateKey(parsedPayload.date)
+				toAttendanceDateKey(item.date) === toAttendanceDateKey(parsedPayload.date)
 			)
 		})
 
