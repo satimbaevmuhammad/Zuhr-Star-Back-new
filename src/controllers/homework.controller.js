@@ -121,6 +121,29 @@ const parseLinks = value => {
 	return normalized
 }
 
+const parseBooleanQuery = (value, fallback = false) => {
+	if (typeof value === 'undefined') {
+		return fallback
+	}
+
+	if (typeof value === 'boolean') {
+		return value
+	}
+
+	const normalized = String(value || '')
+		.trim()
+		.toLowerCase()
+	if (['1', 'true', 'yes', 'y'].includes(normalized)) {
+		return true
+	}
+
+	if (['0', 'false', 'no', 'n'].includes(normalized)) {
+		return false
+	}
+
+	return fallback
+}
+
 const hasHomeworkAssignment = lesson => {
 	if (!lesson) {
 		return false
@@ -283,6 +306,190 @@ const getSafeGroupSubmissions = async ({ lessonId, groupId }) => {
 		}))
 		.filter(submission => Boolean(submission.studentId))
 } // FIX [7]: Add safe group grade list for student homework view without exposing private payload fields
+
+const resolveStudentOwnedGroup = async ({ studentDocument, groupId }) => {
+	const activeGroupIds = getActiveGroupIdsForStudent(studentDocument)
+	if (activeGroupIds.length === 0) {
+		return { statusCode: 403, error: 'Student is not active in any group' }
+	}
+
+	const requestedGroupId = String(groupId || '').trim()
+	let selectedGroupId = ''
+
+	if (requestedGroupId) {
+		if (!mongoose.isValidObjectId(requestedGroupId)) {
+			return { statusCode: 400, error: 'Invalid group id' }
+		}
+
+		if (!activeGroupIds.includes(requestedGroupId)) {
+			return { statusCode: 403, error: 'Student is not active in this group' }
+		}
+
+		selectedGroupId = requestedGroupId
+	} else {
+		if (activeGroupIds.length > 1) {
+			return { statusCode: 400, error: 'Multiple active groups found, provide groupId' }
+		}
+		selectedGroupId = activeGroupIds[0]
+	}
+
+	const group = await Group.findById(selectedGroupId).select(
+		'_id name course courseRef lessons',
+	)
+	if (!group) {
+		return { statusCode: 404, error: 'Group not found' }
+	}
+
+	return { group }
+}
+
+exports.getStudentGroupmatesGrades = async (req, res) => {
+	try {
+		const includeSelf = parseBooleanQuery(req.query.includeSelf, false)
+		const onlyChecked = parseBooleanQuery(req.query.onlyChecked, true)
+
+		const groupResult = await resolveStudentOwnedGroup({
+			studentDocument: req.student,
+			groupId: req.query.groupId,
+		})
+		if (groupResult.error) {
+			return res.status(groupResult.statusCode || 400).json({ message: groupResult.error })
+		}
+
+		const group = groupResult.group
+		const groupmatesQuery = {
+			groups: {
+				$elemMatch: {
+					group: group._id,
+					status: 'active',
+				},
+			},
+		}
+
+		if (!includeSelf) {
+			groupmatesQuery._id = { $ne: req.student._id }
+		}
+
+		const groupmates = await Student.find(groupmatesQuery)
+			.select('_id fullname')
+			.sort({ fullname: 1, _id: 1 })
+			.lean()
+
+		const groupmateIds = groupmates.map(student => student._id).filter(Boolean)
+		if (groupmateIds.length === 0) {
+			return res.status(200).json({
+				groupId: String(group._id),
+				groupName: String(group.name || '').trim(),
+				groupCourse: String(group.course || '').trim(),
+				includeSelf,
+				onlyChecked,
+				totalGroupmates: 0,
+				gradedStudentsCount: 0,
+				totalGrades: 0,
+				data: [],
+			})
+		}
+
+		const lessonFilter = {}
+		if (Array.isArray(group.lessons) && group.lessons.length > 0) {
+			lessonFilter._id = { $in: group.lessons }
+		} else if (group.courseRef) {
+			lessonFilter.course = group.courseRef
+		}
+
+		const lessons =
+			Object.keys(lessonFilter).length > 0
+				? await Lesson.find(lessonFilter)
+					.select('_id title order')
+					.sort({ order: 1, createdAt: 1 })
+					.lean()
+				: []
+		const lessonsById = new Map(
+			lessons.map(lesson => [
+				String(lesson._id),
+				{
+					lessonTitle: String(lesson.title || '').trim(),
+					lessonOrder: Number.isFinite(lesson.order) ? lesson.order : null,
+				},
+			]),
+		)
+
+		const submissionsFilter = {
+			group: group._id,
+			student: { $in: groupmateIds },
+			score: { $ne: null },
+		}
+		if (onlyChecked) {
+			submissionsFilter.checkedAt = { $ne: null }
+		}
+
+		const submissions = await HomeworkSubmission.find(submissionsFilter)
+			.select('student lesson status score submittedAt checkedAt')
+			.sort({ checkedAt: -1, submittedAt: -1, createdAt: -1 })
+			.lean()
+
+		const gradesByStudentId = new Map()
+		for (const submission of submissions) {
+			const studentId = String(submission.student || '').trim()
+			if (!studentId) {
+				continue
+			}
+
+			const lessonId = String(submission.lesson || '').trim()
+			const lessonMeta = lessonsById.get(lessonId)
+			const grades = gradesByStudentId.get(studentId) || []
+
+			grades.push({
+				lessonId,
+				lessonTitle: lessonMeta?.lessonTitle || '',
+				lessonOrder: lessonMeta?.lessonOrder ?? null,
+				score: typeof submission.score === 'number' ? submission.score : null,
+				status: submission.status || 'submitted',
+				submittedAt: submission.submittedAt || null,
+				checkedAt: submission.checkedAt || null,
+			})
+			gradesByStudentId.set(studentId, grades)
+		}
+
+		const data = groupmates.map(groupmate => {
+			const studentId = String(groupmate._id)
+			const grades = gradesByStudentId.get(studentId) || []
+			const scoredGrades = grades.filter(item => typeof item.score === 'number')
+			const averageScore =
+				scoredGrades.length > 0
+					? Number(
+						(
+							scoredGrades.reduce((sum, item) => sum + Number(item.score || 0), 0) /
+							scoredGrades.length
+						).toFixed(2),
+					)
+					: null
+
+			return {
+				studentId,
+				studentName: String(groupmate.fullname || '').trim(),
+				gradesCount: grades.length,
+				averageScore,
+				grades,
+			}
+		})
+
+		return res.status(200).json({
+			groupId: String(group._id),
+			groupName: String(group.name || '').trim(),
+			groupCourse: String(group.course || '').trim(),
+			includeSelf,
+			onlyChecked,
+			totalGroupmates: data.length,
+			gradedStudentsCount: data.filter(item => item.gradesCount > 0).length,
+			totalGrades: submissions.length,
+			data,
+		})
+	} catch (error) {
+		console.error('Get student groupmates grades failed:', error)
+		return res.status(500).json({ message: 'Internal server error' })
+	}
+}
 
 exports.getStudentHomework = async (req, res) => {
 	try {

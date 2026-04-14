@@ -33,7 +33,7 @@ The stack is Node.js + Express + MongoDB (Mongoose), with JWT authentication and
 - Course methodology management (courses -> lessons -> homework)
 - Group management with attendance and student membership lifecycle
 - Homework submission + grading with progression lock (previous lesson checks)
-- Grade visibility isolation (students can only see their own submission/score)
+- Student grade visibility controls (own submissions + groupmates' graded results via scoped endpoint)
 - Finance as append-only ledger events (salary updates, bonuses, fines)
 - Forbidden-rule and employee-violation system with automatic financial impact
 - Extra lesson booking system with strict slot scheduling (UTC+5 model)
@@ -277,8 +277,8 @@ Default role permissions are defined in `src/seeders/roles.seeder.js`:
   - `score < 70` -> `status = submitted`
   - grading metadata includes `checkedBy` and `checkedAt`
 - Grade visibility (important):
-  - Student can see only their own submission/score for a lesson through `GET /homework/lessons/:lessonId` (`submission.status`, `submission.score`, etc.)
-  - Student cannot see groupmates' grades
+  - Student can see their own submission/score for a lesson through `GET /homework/lessons/:lessonId` (`submission.status`, `submission.score`, etc.)
+  - Student can see graded homework scores of active groupmates in their own active group through `GET /homework/groupmates/grades`
   - Listing all submissions (`GET /homework/submissions`) and grading (`PATCH /homework/submissions/:submissionId/grade`) require employee auth
   - Non-admin employees are additionally scoped to groups where they are assigned teacher or support teacher
 
@@ -392,6 +392,7 @@ Base path prefix is `/api`.
 
 - `GET /homework/lessons/:lessonId` (student token; returns that student's own submission summary)
 - `POST /homework/lessons/:lessonId/submissions` (student token)
+- `GET /homework/groupmates/grades` (student token; active groupmates' graded homework results)
 - `GET /homework/submissions` (employee token; non-admin users limited to their own groups)
 - `PATCH /homework/submissions/:submissionId/grade` (employee token; admin/headteacher/superadmin or assigned teacher/support teacher)
 

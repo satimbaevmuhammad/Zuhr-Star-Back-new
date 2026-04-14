@@ -93,6 +93,46 @@ router.post(
 
 /**
  * @swagger
+ * /api/homework/groupmates/grades:
+ *   get:
+ *     tags: [Homework]
+ *     summary: Get graded homework scores for active groupmates (student)
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: groupId
+ *         schema:
+ *           type: string
+ *         description: Optional when student has exactly one active group
+ *       - in: query
+ *         name: includeSelf
+ *         schema:
+ *           type: boolean
+ *           default: false
+ *       - in: query
+ *         name: onlyChecked
+ *         schema:
+ *           type: boolean
+ *           default: true
+ *     responses:
+ *       200:
+ *         description: Groupmates grade list
+ *       400:
+ *         description: Invalid query
+ *       403:
+ *         description: Student is not active in requested group
+ *       404:
+ *         description: Group not found
+ */
+router.get(
+	'/groupmates/grades',
+	requireStudentAuth,
+	homeworkController.getStudentGroupmatesGrades,
+)
+
+/**
+ * @swagger
  * /api/homework/submissions:
  *   get:
  *     tags: [Homework]
