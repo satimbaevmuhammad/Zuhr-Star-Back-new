@@ -3,6 +3,7 @@ const express = require('express')
 const studentController = require('../controllers/student.controller')
 const {
 	requireAnyAuth,
+	allowRoles,
 	allowPermissions,
 	allowStudentSelfOrPermissions,
 } = require('../middleware/auth.middleware')
@@ -162,7 +163,7 @@ router.get(
  */
 router.post(
 	'/:studentId/reward-coins',
-	allowPermissions('students:manage'),
+	allowRoles('teacher', 'headteacher', 'admin', 'superadmin'),
 	validateObjectId('studentId'),
 	studentController.rewardStudentCoins,
 )
