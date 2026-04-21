@@ -10,6 +10,10 @@ const ROLE_CACHE_TTL_MS = 60 * 1000
 let rolePermissionCache = new Map()
 let rolePermissionCacheExpiresAt = 0
 
+const authError = (res, message, code = 'UNAUTHORIZED') => {
+	return res.status(401).json({ message, code })
+}
+
 const extractBearerToken = authHeader => {
 	if (typeof authHeader !== 'string') {
 		return null
@@ -90,16 +94,16 @@ const hasPermission = async (role, permission) => {
 
 const verifyToken = async (req, res, next) => {
 	try {
-		const token = extractBearerToken(req.headers.authorization)
+		const token = extractBearerToken(req.headers?.authorization)
 		if (!token) {
-			return res.status(401).json({ message: 'Authorization token missing' })
+			return authError(res, 'Authorization token missing', 'TOKEN_MISSING')
 		}
 
 		const payload = verifyAccessToken(token)
 		req.user = buildRequestIdentity(payload)
 		return next()
 	} catch (error) {
-		return res.status(401).json({ message: 'Invalid or expired access token' })
+		return authError(res, 'Invalid or expired access token')
 	}
 }
 
@@ -107,19 +111,19 @@ const requireAuth = async (req, res, next) => {
 	return verifyToken(req, res, async () => {
 		try {
 			if (req.user.userType !== 'employee') {
-				return res.status(401).json({ message: 'Invalid employee token' })
+				return authError(res, 'Invalid employee token')
 			}
 
 			const userDocument = await User.findById(req.user.id).select('+refreshToken')
 			if (!userDocument) {
-				return res.status(401).json({ message: 'Invalid token user' })
+				return authError(res, 'Invalid token user')
 			}
 
 			req.userDocument = userDocument
 			req.user.role = userDocument.role
 			return next()
 		} catch (error) {
-			return res.status(401).json({ message: 'Invalid or expired access token' })
+			return authError(res, 'Invalid or expired access token')
 		}
 	})
 }
@@ -128,18 +132,18 @@ const requireStudentAuth = async (req, res, next) => {
 	return verifyToken(req, res, async () => {
 		try {
 			if (req.user.userType !== 'student') {
-				return res.status(401).json({ message: 'Invalid student token' })
+				return authError(res, 'Invalid student token')
 			}
 
 			const student = await Student.findById(req.user.id)
 			if (!student) {
-				return res.status(401).json({ message: 'Invalid token student' })
+				return authError(res, 'Invalid token student')
 			}
 
 			req.student = student
 			return next()
 		} catch (error) {
-			return res.status(401).json({ message: 'Invalid or expired access token' })
+			return authError(res, 'Invalid or expired access token')
 		}
 	})
 }
@@ -150,7 +154,7 @@ const requireAnyAuth = async (req, res, next) => {
 			if (req.user.userType === 'employee') {
 				const userDocument = await User.findById(req.user.id).select('+refreshToken')
 				if (!userDocument) {
-					return res.status(401).json({ message: 'Invalid token user' })
+					return authError(res, 'Invalid token user')
 				}
 
 				req.userDocument = userDocument
@@ -161,16 +165,16 @@ const requireAnyAuth = async (req, res, next) => {
 			if (req.user.userType === 'student') {
 				const student = await Student.findById(req.user.id)
 				if (!student) {
-					return res.status(401).json({ message: 'Invalid token student' })
+					return authError(res, 'Invalid token student')
 				}
 
 				req.student = student
 				return next()
 			}
 
-			return res.status(401).json({ message: 'Invalid token user type' })
+			return authError(res, 'Invalid token user type')
 		} catch (error) {
-			return res.status(401).json({ message: 'Invalid or expired access token' })
+			return authError(res, 'Invalid or expired access token')
 		}
 	})
 }
@@ -178,7 +182,7 @@ const requireAnyAuth = async (req, res, next) => {
 const allowRoles = (...roles) => {
 	return (req, res, next) => {
 		if (!req.user || req.user.userType !== 'employee' || !roles.includes(req.user.role)) {
-			return res.status(403).json({ message: 'Forbidden: insufficient role' })
+			return res.status(403).json({ message: 'Forbidden: insufficient role', code: 'FORBIDDEN' })
 		}
 		return next()
 	}
@@ -187,20 +191,20 @@ const allowRoles = (...roles) => {
 const allowPermissions = (...permissions) => {
 	return async (req, res, next) => {
 		if (!req.user || req.user.userType !== 'employee') {
-			return res.status(401).json({ message: 'Unauthorized' })
+			return authError(res, 'Unauthorized')
 		}
 
 		try {
 			for (const permission of permissions) {
 				const allowed = await hasPermission(req.user.role, permission)
 				if (!allowed) {
-					return res.status(403).json({ message: 'Forbidden: insufficient permissions' })
+					return res.status(403).json({ message: 'Forbidden: insufficient permissions', code: 'FORBIDDEN' })
 				}
 			}
 
 			return next()
 		} catch (error) {
-			return res.status(500).json({ message: 'Failed to load role permissions' })
+			return res.status(500).json({ message: 'Failed to load role permissions', code: 'INTERNAL_SERVER_ERROR' })
 		}
 	}
 }
@@ -208,7 +212,7 @@ const allowPermissions = (...permissions) => {
 const allowPermissionsOrStudent = (...permissions) => {
 	return async (req, res, next) => {
 		if (!req.user) {
-			return res.status(401).json({ message: 'Unauthorized' })
+			return authError(res, 'Unauthorized')
 		}
 
 		if (req.user.userType === 'student') {
@@ -216,20 +220,20 @@ const allowPermissionsOrStudent = (...permissions) => {
 		}
 
 		if (req.user.userType !== 'employee') {
-			return res.status(401).json({ message: 'Unauthorized' })
+			return authError(res, 'Unauthorized')
 		}
 
 		try {
 			for (const permission of permissions) {
 				const allowed = await hasPermission(req.user.role, permission)
 				if (!allowed) {
-					return res.status(403).json({ message: 'Forbidden: insufficient permissions' })
+					return res.status(403).json({ message: 'Forbidden: insufficient permissions', code: 'FORBIDDEN' })
 				}
 			}
 
 			return next()
 		} catch (error) {
-			return res.status(500).json({ message: 'Failed to load role permissions' })
+			return res.status(500).json({ message: 'Failed to load role permissions', code: 'INTERNAL_SERVER_ERROR' })
 		}
 	}
 }
@@ -237,7 +241,7 @@ const allowPermissionsOrStudent = (...permissions) => {
 const allowStudentSelfOrPermissions = (...permissions) => {
 	return async (req, res, next) => {
 		if (!req.user) {
-			return res.status(401).json({ message: 'Unauthorized' })
+			return authError(res, 'Unauthorized')
 		}
 
 		if (req.user.userType === 'student') {
@@ -248,24 +252,25 @@ const allowStudentSelfOrPermissions = (...permissions) => {
 
 			return res.status(403).json({
 				message: 'Forbidden: students can only access their own data',
+				code: 'FORBIDDEN',
 			})
 		}
 
 		if (req.user.userType !== 'employee') {
-			return res.status(401).json({ message: 'Unauthorized' })
+			return authError(res, 'Unauthorized')
 		}
 
 		try {
 			for (const permission of permissions) {
 				const allowed = await hasPermission(req.user.role, permission)
 				if (!allowed) {
-					return res.status(403).json({ message: 'Forbidden: insufficient permissions' })
+					return res.status(403).json({ message: 'Forbidden: insufficient permissions', code: 'FORBIDDEN' })
 				}
 			}
 
 			return next()
 		} catch (error) {
-			return res.status(500).json({ message: 'Failed to load role permissions' })
+			return res.status(500).json({ message: 'Failed to load role permissions', code: 'INTERNAL_SERVER_ERROR' })
 		}
 	}
 }
@@ -287,10 +292,10 @@ const removeUploadedFileIfAny = req => {
 const requireRegisterPermission = (req, res, next) => {
 	const requestedRole = normalizeRoleInput(req.body.role || 'teacher')
 
-	const token = extractBearerToken(req.headers.authorization)
+	const token = extractBearerToken(req.headers?.authorization)
 	if (!token) {
 		removeUploadedFileIfAny(req)
-		return res.status(401).json({ message: 'Authorization token missing' })
+		return authError(res, 'Authorization token missing', 'TOKEN_MISSING')
 	}
 
 	return Promise.resolve()
@@ -299,13 +304,13 @@ const requireRegisterPermission = (req, res, next) => {
 			const identity = buildRequestIdentity(payload)
 			if (identity.userType !== 'employee') {
 				removeUploadedFileIfAny(req)
-				return res.status(401).json({ message: 'Invalid token user' })
+				return authError(res, 'Invalid token user')
 			}
 
 			const user = await User.findById(identity.id).select('+refreshToken')
 			if (!user) {
 				removeUploadedFileIfAny(req)
-				return res.status(401).json({ message: 'Invalid token user' })
+				return authError(res, 'Invalid token user')
 			}
 
 			req.user = identity
@@ -317,6 +322,7 @@ const requireRegisterPermission = (req, res, next) => {
 				removeUploadedFileIfAny(req)
 				return res.status(403).json({
 					message: 'Forbidden: only superadmin can register employees',
+					code: 'FORBIDDEN',
 				})
 			}
 
@@ -324,7 +330,7 @@ const requireRegisterPermission = (req, res, next) => {
 		})
 		.catch(() => {
 			removeUploadedFileIfAny(req)
-			return res.status(401).json({ message: 'Invalid or expired access token' })
+			return authError(res, 'Invalid or expired access token')
 		})
 }
 

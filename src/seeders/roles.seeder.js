@@ -8,7 +8,7 @@ const Role = require('../models/Role.model')
 const DEFAULT_ROLE_PERMISSIONS = [
 	{
 		name: 'teacher',
-		permissions: ['profile:read', 'students:read', 'groups:read'],
+		permissions: ['profile:read', 'students:read', 'students:manage', 'groups:read'],
 	},
 	{
 		name: 'supporteacher',

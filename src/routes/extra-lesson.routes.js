@@ -1,6 +1,6 @@
 const express = require('express')
 const extraLessonController = require('../controllers/extra-lesson.controller')
-const { requireAuth, requireStudentAuth, allowPermissions, allowRoles } = require('../middleware/auth.middleware')
+const { requireAuth, requireStudentAuth, allowPermissions } = require('../middleware/auth.middleware')
 const validateObjectId = require('../middleware/validateObjectId')
 
 const router = express.Router()
@@ -87,14 +87,14 @@ router.get(
 router.post(
 	'/support-teachers/:userId',
 	requireAuth,
-	allowRoles('admin', 'superadmin'),
+	allowPermissions('users:manage'),
 	validateObjectId('userId'),
 	extraLessonController.assignSupportTeacher,
 )
 router.delete(
 	'/support-teachers/:userId',
 	requireAuth,
-	allowRoles('admin', 'superadmin'),
+	allowPermissions('users:manage'),
 	validateObjectId('userId'),
 	extraLessonController.removeSupportTeacher,
 )
@@ -365,13 +365,10 @@ router.get('/requests', requireAuth, extraLessonController.listPendingRequests)
  *       409:
  *         description: Slot conflict or daily cap reached
  */
-router.get('/', requireAuth, allowPermissions('groups:read'), extraLessonController.listExtraLessons)
+router.get('/', requireAuth, extraLessonController.listExtraLessons)
 router.post(
 	'/',
 	requireAuth,
-	// Support teachers + admin/superadmin can create; role check inside controller
-	// (controller verifies isExtraLessonSupport for non-admins).
-	allowRoles('admin', 'superadmin', 'supporteacher', 'headteacher'),
 	extraLessonController.createExtraLesson,
 )
 
@@ -468,7 +465,6 @@ router.patch(
 router.delete(
 	'/:lessonId',
 	requireAuth,
-	allowRoles('admin', 'superadmin'),
 	validateObjectId('lessonId'),
 	extraLessonController.deleteExtraLesson,
 )
@@ -515,6 +511,7 @@ router.delete(
 router.patch(
 	'/:lessonId/approve',
 	requireAuth,
+	allowPermissions('groups:read'),
 	validateObjectId('lessonId'),
 	extraLessonController.approveRequest,
 )
@@ -565,8 +562,17 @@ router.patch(
 router.patch(
 	'/:lessonId/deny',
 	requireAuth,
+	allowPermissions('groups:read'),
 	validateObjectId('lessonId'),
 	extraLessonController.denyRequest,
+)
+
+router.patch(
+	'/:lessonId/cancel',
+	requireAuth,
+	allowPermissions('groups:manage'),
+	validateObjectId('lessonId'),
+	extraLessonController.cancelConfirmedLesson,
 )
 
 /**
@@ -605,6 +611,7 @@ router.patch(
 router.patch(
 	'/:lessonId/complete',
 	requireAuth,
+	allowPermissions('groups:read'),
 	validateObjectId('lessonId'),
 	extraLessonController.markCompleted,
 )

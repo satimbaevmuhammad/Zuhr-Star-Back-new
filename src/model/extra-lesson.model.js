@@ -23,9 +23,16 @@ const MAX_LESSONS_PER_DAY = 5
 const TIMEZONE_OFFSET_HOURS = 5
 const TIMEZONE_OFFSET_MINUTES = TIMEZONE_OFFSET_HOURS * 60 // 300
 
+// Canonical extra-lesson slot times in local UTC+5.
+const VALID_SLOT_TIMES_LOCAL = ['14:00', '15:10', '16:20', '17:30', '18:40']
+
 // Valid slot start times expressed as minutes from local midnight.
-// local 14:00 = 840 min, 15:10 = 910 min, 16:20 = 980 min, 17:30 = 1050 min, 18:40 = 1120 min
-const VALID_SLOT_MINUTES_LOCAL = [840, 910, 980, 1050, 1120]
+const VALID_SLOT_MINUTES_LOCAL = VALID_SLOT_TIMES_LOCAL.map(slot => {
+	const [hour, minute] = slot.split(':').map(Number)
+	return hour * 60 + minute
+})
+
+const EXTRA_LESSON_STATUSES = ['pending_approval', 'confirmed', 'cancelled', 'completed']
 
 // Maximum number of students per extra lesson (teacher can add 2–3 students).
 const MAX_STUDENTS_PER_LESSON = 3
@@ -113,7 +120,7 @@ const extraLessonSchema = new mongoose.Schema(
 		//   completed        – lesson has taken place.
 		status: {
 			type: String,
-			enum: ['pending_approval', 'confirmed', 'cancelled', 'completed'],
+			enum: EXTRA_LESSON_STATUSES,
 			default: 'pending_approval',
 		},
 
@@ -152,6 +159,24 @@ const extraLessonSchema = new mongoose.Schema(
 			maxlength: 500,
 		},
 
+		approvedBy: {
+			type: mongoose.Schema.Types.ObjectId,
+			ref: 'User',
+			default: null,
+		},
+
+		deniedBy: {
+			type: mongoose.Schema.Types.ObjectId,
+			ref: 'User',
+			default: null,
+		},
+
+		completedBy: {
+			type: mongoose.Schema.Types.ObjectId,
+			ref: 'User',
+			default: null,
+		},
+
 		// Optional room or location identifier.
 		room: {
 			type: String,
@@ -184,7 +209,9 @@ module.exports = {
 	MAX_LESSONS_PER_DAY,
 	TIMEZONE_OFFSET_HOURS,
 	TIMEZONE_OFFSET_MINUTES,
+	VALID_SLOT_TIMES_LOCAL,
 	VALID_SLOT_MINUTES_LOCAL,
 	MAX_STUDENTS_PER_LESSON,
 	MAX_SUPPORT_TEACHERS,
+	EXTRA_LESSON_STATUSES,
 }
