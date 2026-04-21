@@ -1,75 +1,88 @@
 # BackZuhr Backend API
 
-BackZuhr is a backend for an education center that combines:
+BackZuhr is a Node.js + Express + MongoDB backend for an education center.  
+It combines CRM, LMS, scheduling, attendance, homework, and finance workflows in one API.
 
-- CRM flows (lead capture and processing)
-- LMS flows (courses, groups, lessons, homework)
-- Operations (employee auth/roles, extra lesson booking, finance, violations)
+Main domains:
+- Employee auth and role-based access control (RBAC)
+- Student auth and student lifecycle
+- Courses, lessons, groups, attendance, and homework
+- Extra lesson booking and support-teacher scheduling
+- Employee violations and finance ledger events
+- Lead management (CRM)
 
-The stack is Node.js + Express + MongoDB (Mongoose), with JWT authentication and Swagger docs.
+---
 
-## Table Of Contents
+## Table of Contents
 
-- [1. Core Capabilities](#1-core-capabilities)
+- [1. Core Features](#1-core-features)
 - [2. Tech Stack](#2-tech-stack)
 - [3. Architecture Overview](#3-architecture-overview)
 - [4. Project Structure](#4-project-structure)
 - [5. Quick Start](#5-quick-start)
 - [6. Environment Variables](#6-environment-variables)
-- [7. Authentication And Authorization](#7-authentication-and-authorization)
-- [8. Domain Modules](#8-domain-modules)
-- [9. API Endpoint Map](#9-api-endpoint-map)
-- [10. Files And Uploads](#10-files-and-uploads)
-- [11. Error Contract](#11-error-contract)
-- [12. Tests](#12-tests)
-- [13. Operational Notes](#13-operational-notes)
+- [7. Runtime Routes and Docs](#7-runtime-routes-and-docs)
+- [8. Authentication and Authorization](#8-authentication-and-authorization)
+- [9. Domain Modules](#9-domain-modules)
+- [10. Data Model Overview](#10-data-model-overview)
+- [11. API Endpoint Index](#11-api-endpoint-index)
+- [12. Uploads and Public URLs](#12-uploads-and-public-urls)
+- [13. Error Contract](#13-error-contract)
+- [14. Testing](#14-testing)
+- [15. Operational Notes and Known Caveats](#15-operational-notes-and-known-caveats)
+- [16. Frontend Integration](#16-frontend-integration)
 
-## 1. Core Capabilities
+---
 
-- Employee authentication with JWT access/refresh tokens
-- Student authentication with separate JWT identity and token flow
-- Dynamic RBAC roles with permission checks in middleware
-- User and student management
-- Course methodology management (courses -> lessons -> homework)
-- Group management with attendance and student membership lifecycle
-- Homework submission + grading with progression lock (previous lesson checks)
-- Student grade visibility controls (own submissions + groupmates' graded results via scoped endpoint)
-- Finance as append-only ledger events (salary updates, bonuses, fines)
-- Forbidden-rule and employee-violation system with automatic financial impact
-- Extra lesson booking system with strict slot scheduling (UTC+5 model)
-- Leads CRUD for CRM pipeline
-- Swagger OpenAPI docs and health endpoints
+## 1. Core Features
+
+- JWT authentication for employees and students (separate identities)
+- Dynamic RBAC permissions using role documents in MongoDB
+- Employee profile and role management
+- Student CRUD, student login, and student-group membership sync
+- Group scheduling with odd/even schedule validation
+- Attendance with in-window enforcement and automatic balance effects
+- Course methodology management and lesson synchronization to linked groups
+- Homework assignment, submission, grading, and unlock progression
+- Finance as append-only ledger events (`salary_update`, `bonus`, `fine`, `student_payment`)
+- Forbidden rules + employee violations with optional automatic fine events
+- Extra lesson booking with strict UTC+5 slot rules and lifecycle states
+- Lead management for CRM intake
+- Swagger docs (`/api-docs`) and JSON OpenAPI output (`/api-docs-json`)
+
+---
 
 ## 2. Tech Stack
 
-- Runtime: Node.js (CommonJS modules)
-- HTTP: `express@5`
-- Database: MongoDB + `mongoose@9`
-- Auth: `jsonwebtoken`, `bcrypt`
-- File uploads: `multer`
-- API docs: `swagger-jsdoc`, `swagger-ui-express`
-- Cross-origin: `cors`
+- Runtime: Node.js (CommonJS)
+- Framework: Express 5
+- Database: MongoDB + Mongoose
+- Auth/Security: `jsonwebtoken`, `bcrypt`
+- Uploads: `multer`
+- Docs: `swagger-jsdoc`, `swagger-ui-express`
 - Config: `dotenv`
-- Testing style: Node scripts with assertions (`scripts/smoke.test.js`, `scripts/senior.test.js`)
+- CORS: `cors`
+- Testing style: Node scripts + assertions (`scripts/smoke.test.js`, `scripts/senior.test.js`)
+
+---
 
 ## 3. Architecture Overview
 
-- `index.js` starts HTTP server immediately, then connects to MongoDB with retry logic.
-- `app.js` configures middleware, CORS, static files, Swagger docs, API routes, and error handling.
-- Routes are organized by domain under `src/routes/`.
-- Controllers under `src/controllers/` contain request validation and business logic.
-- Mongoose schemas are split into:
-  - `src/model/` for main domain models
-  - `src/models/` for shared/support models (`Role`, `FinancialEvent`, `FaceCredential`)
-- Services in `src/services/` provide reusable logic (course counts, finance summary, student balance reset).
-
 High-level flow:
+1. `index.js` starts the HTTP server.
+2. MongoDB connection runs in background with retry logic (`src/config/db.js`).
+3. `app.js` configures middleware, CORS, static routes, Swagger, API routes, and global error handling.
+4. Route handlers call controllers.
+5. Controllers apply domain logic and use models/services.
+6. Error middleware normalizes error responses.
 
-1. Request enters Express route.
-2. Auth middleware validates token and user type (employee or student).
-3. Permission middleware checks RBAC permissions/roles.
-4. Controller validates payload and performs domain actions.
-5. Response is normalized (especially error shape).
+Key design points:
+- Server starts listening before DB connection succeeds.
+- Roles are seeded on DB connect.
+- Finance events are append-only by model constraint.
+- Student balance reset checks are invoked from student/group controllers.
+
+---
 
 ## 4. Project Structure
 
@@ -81,31 +94,59 @@ BackZuhr/
 |- README.md
 |- README.frontend.md
 |- public/
-|  |- face-id-demo.html
+|  `- face-id-demo.html
 |- uploads/
 |- scripts/
 |  |- smoke.test.js
-|  |- senior.test.js
+|  `- senior.test.js
 `- src/
    |- config/
    |  |- db.js
    |  `- swagger.js
    |- controllers/
+   |  |- auth.controller.js
+   |  |- student.controller.js
+   |  |- group.controller.js
+   |  |- course.controller.js
+   |  |- homework.controller.js
+   |  |- finance.controller.js
+   |  |- forbidden.controller.js
+   |  |- extra-lesson.controller.js
+   |  `- lead.controller.js
    |- middleware/
+   |  |- auth.middleware.js
+   |  |- upload.middleware.js
+   |  |- validateObjectId.js
+   |  `- errorHandler.js
    |- model/
+   |  |- user.model.js
+   |  |- student.model.js
+   |  |- group.model.js
+   |  |- course.model.js
+   |  |- lesson.model.js
+   |  |- homework-submission.model.js
+   |  |- extra-lesson.model.js
+   |  |- forbidden-rule.model.js
+   |  |- employee-violation.model.js
+   |  `- lead.model.js
    |- models/
+   |  |- Role.model.js
+   |  |- FinancialEvent.model.js
+   |  `- FaceCredential.model.js
    |- routes/
    |- seeders/
    |- services/
    `- utils/
 ```
 
+---
+
 ## 5. Quick Start
 
 ### Prerequisites
 
 - Node.js 18+ recommended
-- MongoDB instance
+- MongoDB instance (local or hosted)
 
 ### Install
 
@@ -113,14 +154,14 @@ BackZuhr/
 npm install
 ```
 
-### Configure
+### Configure `.env`
 
-Create `.env` in project root (`BackZuhr`) and set at least:
+Create `.env` in project root with at least:
 
 ```env
 MONGO_URI=mongodb://localhost:27017/backzuhr
 PORT=3000
-JWT_SECRET=replace_with_a_strong_secret
+JWT_SECRET=replace_with_a_long_random_secret
 ```
 
 ### Run
@@ -129,12 +170,13 @@ JWT_SECRET=replace_with_a_strong_secret
 node index.js
 ```
 
-Useful URLs after startup:
+### Run tests
 
-- `GET /health`
-- `GET /api-docs`
-- `GET /api-docs-json`
-- `GET /face-id-demo` (Face ID demo page)
+```bash
+npm test
+```
+
+---
 
 ## 6. Environment Variables
 
@@ -142,327 +184,434 @@ Useful URLs after startup:
 |---|---|---|---|
 | `MONGO_URI` | Yes | - | MongoDB connection string |
 | `PORT` | No | `3000` | HTTP server port |
-| `JWT_SECRET` | Yes (or legacy fallback) | - | Primary signing secret for access/refresh tokens |
+| `JWT_SECRET` | Yes (recommended) | - | Primary JWT signing secret |
 | `JWT_ACCESS_SECRET` | Legacy fallback | - | Used only if `JWT_SECRET` is missing |
-| `JWT_REFRESH_SECRET` | Legacy fallback | - | Used only if `JWT_SECRET` is missing |
-| `STRICT_REFRESH_TOKEN_MATCH` | No | `false` | If `true`, refresh token in DB must exactly match incoming token |
-| `CORS_ORIGINS` | No | allow all | Comma-separated allow-list of origins |
-| `CORS_ORIGIN` | No | allow all | Legacy alias for a single origin value |
-| `PUBLIC_BASE_URL` | No | request-derived | Base URL for absolute file links |
+| `JWT_REFRESH_SECRET` | No (legacy) | - | Present in historical configs, not used by current token utility |
+| `STRICT_REFRESH_TOKEN_MATCH` | No | `false` | If `true`, DB refresh token must exactly match incoming refresh token |
+| `CORS_ORIGINS` | No | allow all | Comma-separated allow list (`*` allowed) |
+| `CORS_ORIGIN` | No | allow all | Legacy single-origin alias |
+| `PUBLIC_BASE_URL` | No | request-derived | Base URL used for absolute file links |
 | `BASE_URL` | No | request-derived | Fallback alias for `PUBLIC_BASE_URL` |
-| `FACE_MATCH_THRESHOLD` | No | `0.45` | Face match threshold (0 < value <= 2) |
-| `FACE_LOGIN_MAX_CANDIDATES` | No | `2000` | Max candidate records checked during face login (capped at 10000) |
-| `STUDENT_BALANCE_RESET_INTERVAL_MS` | No | `3600000` | Interval for scheduled balance reset job helper |
-| `STUDENT_BALANCE_RESET_MIN_GAP_MS` | No | `300000` | Throttle between reset checks |
+| `FACE_MATCH_THRESHOLD` | No | `0.45` | Face login distance threshold (`0 < value <= 2`) |
+| `FACE_LOGIN_MAX_CANDIDATES` | No | `2000` | Max descriptors checked on face login (hard cap `10000`) |
+| `STUDENT_BALANCE_RESET_INTERVAL_MS` | No | `3600000` | Interval for scheduled reset helper |
+| `STUDENT_BALANCE_RESET_MIN_GAP_MS` | No | `300000` | Min gap between reset checks (throttle) |
 
-## 7. Authentication And Authorization
+---
 
-### Two User Types
+## 7. Runtime Routes and Docs
 
-BackZuhr uses separate JWT identities:
+System endpoints:
+- `GET /health` -> service health
+- `GET /api-docs` -> Swagger UI
+- `GET /api-docs-json` -> OpenAPI JSON
+- `GET /face-id-demo` -> browser Face ID demo page
 
+Static serving:
+- `GET /uploads/*` -> uploaded files
+- `GET /public/*` -> public assets
+
+API base prefix:
+- All business routes are under `/api`
+
+---
+
+## 8. Authentication and Authorization
+
+### 8.1 Token Model
+
+BackZuhr uses one JWT system with typed payloads:
 - Employee token: `userType = "employee"`
 - Student token: `userType = "student"`
 
-This keeps employee/admin flows separate from student flows.
+Token TTLs:
+- Access token: `24h`
+- Refresh token: `7d`
 
-### Token TTL
-
-- Employee access token: `24h`
-- Employee refresh token: `7d`
-- Student access token: `24h`
-- Student refresh token: `7d`
-
-### Auth Middleware
+### 8.2 Auth Middleware
 
 - `requireAuth` -> employee token only
 - `requireStudentAuth` -> student token only
-- `requireAnyAuth` -> employee or student token
-- `allowRoles(...roles)` -> static role allow-list
-- `allowPermissions(...perms)` -> checks dynamic role permissions from DB
-- `allowPermissionsOrStudent(...perms)` -> employee must pass permissions, student is allowed
-- `allowStudentSelfOrPermissions(...perms)` -> employee must pass permissions, student can only access own `:studentId`
+- `requireAnyAuth` -> employee or student
+- `allowRoles(...roles)` -> role whitelist
+- `allowPermissions(...permissions)` -> dynamic permission checks via role documents
+- `allowPermissionsOrStudent(...permissions)` -> employees must pass permissions, students pass
+- `allowStudentSelfOrPermissions(...permissions)` -> student can only access own `:studentId`
 
-### RBAC Defaults (Seeded On DB Connect)
+### 8.3 Default Roles and Permissions (Seeded)
 
-Default role permissions are defined in `src/seeders/roles.seeder.js`:
+Seeded in `src/seeders/roles.seeder.js`:
 
-- `teacher`: `profile:read`, `students:read`, `groups:read`
-- `supporteacher`: `profile:read`, `students:read`, `groups:read`
-- `headteacher`: teacher perms + `users:read`, `students:manage`, `groups:manage`
-- `admin`: headteacher perms + `users:manage`, `users:manage_roles`
-- `superadmin`: `*`
+- `teacher`:
+  - `profile:read`
+  - `students:read`
+  - `students:manage`
+  - `groups:read`
+- `supporteacher`:
+  - `profile:read`
+  - `students:read`
+  - `groups:read`
+- `headteacher`:
+  - `profile:read`
+  - `users:read`
+  - `students:read`
+  - `students:manage`
+  - `groups:read`
+  - `groups:manage`
+- `admin`:
+  - `profile:read`
+  - `users:read`
+  - `users:manage`
+  - `users:manage_roles`
+  - `students:read`
+  - `students:manage`
+  - `groups:read`
+  - `groups:manage`
+- `superadmin`:
+  - `*`
 
-## 8. Domain Modules
+Notes:
+- Input role `"supportteacher"` is normalized to `"supporteacher"`.
+- Role permissions are cached in-memory for 60 seconds and invalidated when role permissions are updated.
 
-### 8.1 Auth And Users
+---
 
-- Password login and token rotation
-- Face ID login using 128-length descriptor vectors
+## 9. Domain Modules
+
+### 9.1 Auth and Users
+
+- Employee login with password or Face ID descriptor
 - Face descriptors stored in separate `FaceCredential` collection
-- Profile update includes avatar upload support
-- Role management endpoints (including permission updates by role document)
+- Refresh token rotation on login/refresh
+- Profile update with avatar upload
+- Role listing and role-permission updates
+- User role updates and guarded deletes
 
-### 8.2 Students
+Important current behavior:
+- `POST /api/auth/register` is currently mounted without `requireAuth` / `requireRegisterPermission` middleware in the route file.
+- Controller still blocks creating `superadmin` via this endpoint.
 
-- Student CRUD and login
-- Legacy plaintext student passwords are upgraded to bcrypt on successful login
-- Student-group memberships tracked with status (`active`, `paused`, `completed`, `left`)
-- Coin rewards endpoint
-- Group links stay synchronized between `students.groups` and `groups.students`
+### 9.2 Students
 
-### 8.3 Groups
+- Student login + refresh token flow
+- Legacy plain-text password upgrade to bcrypt during successful login
+- Student CRUD and group membership lifecycle
+- Student coin rewards
+- Group/student link synchronization across both collections
+- Periodic balance reset checks triggered in controller flows
 
-- Group creation enforces odd/even scheduling patterns:
-  - `odd` -> monday, wednesday, friday
-  - `even` -> tuesday, thursday, saturday
-- Group-to-course methodology attachment works in two modes:
-  - Linked mode (`courseId` provided):
-    - `courseRef` is set to the target course
-    - `group.course` is normalized from `course.name`
-    - `group.lessons` is auto-copied from `course.methodology`
-  - Manual mode (`courseId` omitted, plain `course` name used):
-    - `courseRef` is set to `null`
-    - `group.lessons` stays empty and is managed manually (no methodology sync)
-- On group update:
-  - Sending `courseId` relinks the group and refreshes `group.lessons` from that course methodology
-  - Sending only `course` (without `courseId`) detaches the group from the course and clears `group.lessons`
-- Attendance logic:
-  - Only allowed during scheduled lesson window
-  - Date must be today
-  - Only active group members can be marked
-  - Balance is adjusted based on attendance status and monthly fee
-- Computed fields returned in responses:
-  - `studentsCount`
-  - `coinBalance` (`studentsCount * 200`)
+### 9.3 Groups and Attendance
 
-### 8.4 Courses And Lessons
+- Group creation with strict odd/even schedule shape:
+  - `odd` -> monday/wednesday/friday
+  - `even` -> tuesday/thursday/saturday
+- Optional `courseId` linking:
+  - with `courseId`: `courseRef` set, lessons synced from course methodology
+  - without `courseId`: manual mode with plain `course` name
+- Attendance validation:
+  - date must be today (UTC+5 local logic)
+  - updates allowed only during scheduled lesson window
+  - only group teacher/support/admin-headteacher-superadmin can manage
+- Attendance affects student balance:
+  - charged statuses: `present`, `late`
+  - per-lesson cost: `monthlyFee / 12`
 
-- Course methodology model:
-  - `course.methodology` stores lesson ObjectIds
-  - duplicates are blocked
-  - max methodology size is `durationMonths * 12`
-- Lesson ordering model:
-  - lessons are unique by `(course, order)`
-  - lesson `order` is incremental within a course
-- Methodology sync behavior:
-  - `POST /courses/:courseId/lessons` creates a lesson, adds it to `course.methodology`, and adds the lesson to every `group.lessons` where `group.courseRef = courseId`
-  - `DELETE /courses/:courseId/lessons/:lessonId` removes that lesson from both `course.methodology` and all linked groups
-  - `POST /courses/:courseId/rebuild-methodology` rebuilds methodology from actual lessons (sorted by `order`) and force-syncs all linked groups' `lessons`
-- Homework is attached directly to the lesson entity:
-  - `lesson.homework` (description)
-  - `lesson.homeworkLinks` (array of links)
-  - `lesson.homeworkDocuments` (uploaded files)
-- Homework can be attached/updated by staff through:
-  - `POST /courses/:courseId/lessons` (when creating lesson)
-  - `PATCH /courses/:courseId/lessons/:lessonId` (general lesson update)
-  - `PATCH /courses/:courseId/lessons/:lessonId/homework` (homework-focused update)
-  - `POST /courses/:courseId/lessons/:lessonId/homework/documents` (homework file attachments)
+### 9.4 Courses, Lessons, and Methodology Sync
 
-### 8.5 Homework
+- Courses enforce:
+  - unique name
+  - `durationMonths` range `1..120`
+  - max lessons = `durationMonths * 12`
+- Lesson ordering:
+  - unique `(course, order)` index
+  - order is auto-sequenced in create flow
+- Methodology sync:
+  - creating/deleting lessons updates `course.methodology`
+  - linked groups (`courseRef`) receive lesson add/remove updates
+  - rebuild endpoint re-synchronizes methodology from lessons
+- Lesson content:
+  - lesson documents
+  - homework description
+  - homework links
+  - homework attachments
 
-- Student access flow:
-  - student calls `GET /homework/lessons/:lessonId`
-  - system checks student is active in a matching group and enrolled in that lesson
-  - if multiple matching active groups exist, `groupId` must be provided
-- Homework unlock rule:
-  - previous lessons in the same course/group that contain homework must already be approved
-  - pass threshold is `score >= 70`
-  - if blocked, API returns `isBlocked: true` and `blockedByLessonId`
-- Submission model:
-  - one submission per `(lesson, student)` (unique index)
-  - student can resubmit until approved
-  - once approved, resubmission is blocked
-  - submission supports `description`, `links`, and file attachments
-- Grading model:
-  - score range: `0..100`
-  - `score >= 70` -> `status = approved`
-  - `score < 70` -> `status = submitted`
-  - grading metadata includes `checkedBy` and `checkedAt`
-- Grade visibility (important):
-  - Student can see their own submission/score for a lesson through `GET /homework/lessons/:lessonId` (`submission.status`, `submission.score`, etc.)
-  - Student can see graded homework scores of active groupmates in their own active group through `GET /homework/groupmates/grades`
-  - Listing all submissions (`GET /homework/submissions`) and grading (`PATCH /homework/submissions/:submissionId/grade`) require employee auth
-  - Non-admin employees are additionally scoped to groups where they are assigned teacher or support teacher
+### 9.5 Homework
 
-### 8.6 Finance
+- Student fetches assignment by lesson
+- Unlock logic requires previous homework lessons (in ordered course flow) to be approved with score >= 70
+- One submission per `(lesson, student)` (unique index)
+- Resubmission allowed until approved
+- Grading:
+  - score range `0..100`
+  - `>=70` -> `approved`
+  - `<70` -> remains/reverts to `submitted`
+- Student visibility:
+  - own assignment/submission status
+  - graded groupmate scores via dedicated endpoint
 
-- Finance data is append-only via `FinancialEvent`
-- Event types: `salary`, `salary_update`, `bonus`, `fine`
-- Event updates/deletes are blocked at model level (immutable ledger behavior)
-- Employee summary is aggregated from events:
-  - latest salary
-  - total bonuses
-  - total fines
-  - net/take-home estimate
+### 9.6 Finance (Append-Only Ledger)
 
-### 8.7 Forbidden Rules And Violations
+- `FinancialEvent` types:
+  - `salary`
+  - `salary_update`
+  - `bonus`
+  - `fine`
+  - `student_payment`
+- Model blocks updates/deletes via pre-hooks
+- Employee summary and monthly history derived from events
+- Student payment events increase `Student.balance`
+- Deletion endpoint for transactions intentionally returns immutable-flow errors
 
-- Admin creates forbidden behavior rules with default fine amount
-- Recording a violation:
+### 9.7 Forbidden Rules and Violations
+
+- CRUD for forbidden behavior rules
+- Violation recording:
   - creates `EmployeeViolation`
-  - appends violation snapshot to `User.forbidens`
-  - appends linked fine event (if fine > 0)
-- Deleting a violation appends reversal finance event (negative fine)
+  - appends snapshot entry into `User.forbidens`
+  - optionally appends finance fine event
+- Violation delete:
+  - removes violation
+  - removes snapshot from user
+  - appends negative fine reversal event
 
-### 8.8 Extra Lessons
+### 9.8 Extra Lessons
 
-- Dedicated booking module for extra support lessons
-- Strict fixed slots in local UTC+5 time:
+- Fixed UTC+5 slot system:
   - `14:00`, `15:10`, `16:20`, `17:30`, `18:40`
-- Constraints:
-  - max 5 lessons per teacher per day
+- Limits:
+  - max 5 lessons per teacher/day
   - max 3 students per lesson
   - max 3 designated support teachers globally
-- Status lifecycle:
+- Status flow:
   - `pending_approval` -> `confirmed` -> `completed`
-  - or `pending_approval` -> `cancelled`
-- Public availability endpoint allows slot browsing without auth
+  - `pending_approval` -> `cancelled`
+  - `confirmed` -> `cancelled` (manager cancel route)
+- Public availability check endpoint (no auth)
+- Supports student-request flow and teacher-created direct confirmed flow
 
-### 8.9 Leads
+### 9.9 Leads (CRM)
 
-- Basic CRM lead CRUD
+- Lead CRUD
 - Source enum:
-  - `INSTAGRAM`, `TELEGRAM`, `CALL_CENTER`, `WEBSITE`, `LANDING`, `FRIEND`
-- Paginated list with search/filter support
+  - `INSTAGRAM`
+  - `TELEGRAM`
+  - `CALL_CENTER`
+  - `WEBSITE`
+  - `LANDING`
+  - `FRIEND`
 
-## 9. API Endpoint Map
+---
 
-Base path prefix is `/api`.
+## 10. Data Model Overview
 
-### Auth (`/auth`)
+Primary entity relationships:
 
-- `POST /auth/register`
-- `POST /auth/login`
-- `POST /auth/login/face`
-- `PATCH /auth/face`
-- `DELETE /auth/face`
-- `POST /auth/refresh-token`
-- `POST /auth/logout`
-- `GET /auth/me`
-- `GET /auth/users`
-- `GET /auth/roles`
-- `PATCH /auth/roles/:roleId`
-- `PATCH /auth/users/:userId/role`
-- `PATCH /auth/users/:userId`
-- `DELETE /auth/users/:userId`
+- `User`
+  - employee account with role, optional face-enabled flag, salary field, forbidden snapshots
+- `Role`
+  - role name + dynamic permissions
+- `FaceCredential`
+  - one-to-one with user, stores 128-length face descriptor
+- `Student`
+  - student profile, token fields, balance, coin balance, group memberships
+- `Group`
+  - teacher/support teachers/students, schedule, attendance, optional linked course
+- `Course`
+  - course metadata + methodology lesson references
+- `Lesson`
+  - belongs to course, ordered sequence, documents + homework fields
+- `HomeworkSubmission`
+  - student/lesson/group submission, status/score/history/documents
+- `FinancialEvent`
+  - immutable ledger event for employee or student transactions
+- `ForbiddenRule`
+  - violation rule metadata + default fine
+- `EmployeeViolation`
+  - violation event linked to employee and rule
+- `ExtraLesson`
+  - support-teacher scheduled extra class with lifecycle + student entries
+- `Lead`
+  - CRM intake record
 
-### Students (`/students`)
+---
 
-- `POST /students/login`
-- `POST /students/refresh-token`
-- `GET /students`
-- `POST /students`
-- `GET /students/:studentId` (employee with permission or same student via student token)
-- `PATCH /students/:studentId`
-- `DELETE /students/:studentId`
-- `GET /students/:studentId/groups` (employee with permission or same student via student token)
-- `POST /students/:studentId/reward-coins`
+## 11. API Endpoint Index
 
-### Groups (`/groups`)
+Base prefix: `/api`
 
-- `GET /groups` (employee with permission or student token)
-- `POST /groups`
-- `GET /groups/:groupId` (employee with permission or student token)
-- `PATCH /groups/:groupId`
-- `DELETE /groups/:groupId`
-- `GET /groups/:groupId/students` (employee with permission or student token)
-- `POST /groups/:groupId/students/:studentId`
-- `DELETE /groups/:groupId/students/:studentId`
-- `POST /groups/:groupId/attendance`
-- `PATCH /groups/:groupId/attendance/students/:studentId`
+### 11.1 Auth (`/api/auth`)
 
-### Courses (`/courses`)
+| Method | Path | Access |
+|---|---|---|
+| POST | `/register` | Currently no route middleware guard |
+| POST | `/login` | Public |
+| POST | `/login/face` | Public |
+| PATCH | `/face` | Employee token |
+| DELETE | `/face` | Employee token |
+| POST | `/refresh-token` | Public (refresh token required) |
+| POST | `/logout` | Employee token |
+| GET | `/me` | Employee token |
+| GET | `/users` | Employee + permission (`users:read`) |
+| GET | `/roles` | Superadmin |
+| PATCH | `/roles/:roleId` | Superadmin |
+| PATCH | `/users/:userId/role` | Employee + permission (`users:manage_roles`) |
+| PATCH | `/users/:userId` | Employee self |
+| DELETE | `/users/:userId` | Employee + permission (`users:manage`) |
 
-- `GET /courses` (employee with permission or student token)
-- `POST /courses`
-- `GET /courses/:courseId` (employee with permission or student token)
-- `PATCH /courses/:courseId`
-- `DELETE /courses/:courseId`
-- `GET /courses/:courseId/lessons` (employee with permission or student token)
-- `POST /courses/:courseId/lessons`
-- `PATCH /courses/:courseId/lessons/:lessonId`
-- `DELETE /courses/:courseId/lessons/:lessonId`
-- `GET /courses/:courseId/lessons/:lessonId/documents` (employee with permission or student token)
-- `DELETE /courses/:courseId/lessons/:lessonId/documents/:documentId`
-- `GET /courses/:courseId/lessons/:lessonId/homework` (employee with permission or student token)
-- `PATCH /courses/:courseId/lessons/:lessonId/homework`
-- `POST /courses/:courseId/lessons/:lessonId/homework/documents`
-- `DELETE /courses/:courseId/lessons/:lessonId/homework/documents/:documentId`
-- `POST /courses/:courseId/rebuild-methodology`
+### 11.2 Students (`/api/students`)
 
-### Homework (`/homework`)
+| Method | Path | Access |
+|---|---|---|
+| POST | `/login` | Public |
+| POST | `/refresh-token` | Public |
+| GET | `/` | Any auth (employees need `students:read`) |
+| POST | `/` | Employee + permission (`students:manage`) |
+| GET | `/:studentId` | Student self or employee permission |
+| PATCH | `/:studentId` | Employee + permission (`students:manage`) |
+| DELETE | `/:studentId` | Employee + permission (`students:manage`) |
+| GET | `/:studentId/groups` | Student self or employee permission |
+| POST | `/:studentId/reward-coins` | Teacher/headteacher/admin/superadmin |
 
-- `GET /homework/lessons/:lessonId` (student token; returns that student's own submission summary)
-- `GET /homework/lesson/:lessonId` (student token; backward-compatible alias of endpoint above)
-- `POST /homework/lessons/:lessonId/submissions` (student token)
-- `POST /homework/lesson/:lessonId/submissions` (student token; backward-compatible alias)
-- `GET /homework/groupmates/grades` (student token; active groupmates' graded homework results)
-- `GET /homework/submissions` (employee token; non-admin users limited to their own groups)
-- `PATCH /homework/submissions/:submissionId/grade` (employee token; admin/headteacher/superadmin or assigned teacher/support teacher)
+### 11.3 Groups (`/api/groups`)
 
-### Finance (`/finance`)
+| Method | Path | Access |
+|---|---|---|
+| GET | `/` | Student or employee permission (`groups:read`) |
+| POST | `/` | Employee permission (`groups:manage`) |
+| GET | `/:groupId` | Student or employee permission (`groups:read`) |
+| PATCH | `/:groupId` | Employee permission (`groups:manage`) |
+| DELETE | `/:groupId` | Employee permission (`groups:manage`) |
+| GET | `/:groupId/students` | Student or employee permission (`groups:read`/`students:read`) |
+| POST | `/:groupId/students/:studentId` | Employee permission (`groups:manage`) |
+| DELETE | `/:groupId/students/:studentId` | Employee permission (`groups:manage`) |
+| POST | `/:groupId/attendance` | Employee permission (`groups:read`) |
+| PATCH | `/:groupId/attendance/students/:studentId` | Employee permission (`groups:read`) |
 
-- `GET /finance/transactions`
-- `DELETE /finance/transactions/:transactionId` (intentionally immutable flow)
-- `GET /finance/employees`
-- `GET /finance/employees/:employeeId`
-- `PATCH /finance/employees/:employeeId/salary`
-- `POST /finance/employees/:employeeId/bonus`
-- `POST /finance/employees/:employeeId/fine`
+### 11.4 Courses and Lessons (`/api/courses`)
 
-### Forbidden (`/forbidden`)
+| Method | Path | Access |
+|---|---|---|
+| GET | `/` | Student or employee permission (`groups:read`) |
+| POST | `/` | Employee permission (`groups:manage`) |
+| GET | `/:courseId` | Student or employee permission (`groups:read`) |
+| PATCH | `/:courseId` | Employee permission (`groups:manage`) |
+| DELETE | `/:courseId` | Employee permission (`groups:manage`) |
+| GET | `/:courseId/lessons` | Student or employee permission (`groups:read`) |
+| POST | `/:courseId/lessons` | Admin/headteacher/superadmin |
+| PATCH | `/:courseId/lessons/:lessonId` | Admin/headteacher/superadmin |
+| DELETE | `/:courseId/lessons/:lessonId` | Admin/headteacher/superadmin |
+| GET | `/:courseId/lessons/:lessonId/documents` | Student or employee permission (`groups:read`) |
+| DELETE | `/:courseId/lessons/:lessonId/documents/:documentId` | Admin/headteacher/superadmin |
+| GET | `/:courseId/lessons/:lessonId/homework` | Student or employee permission (`groups:read`) |
+| PATCH | `/:courseId/lessons/:lessonId/homework` | Admin/headteacher/superadmin |
+| POST | `/:courseId/lessons/:lessonId/homework/documents` | Admin/headteacher/superadmin |
+| DELETE | `/:courseId/lessons/:lessonId/homework/documents/:documentId` | Admin/headteacher/superadmin |
+| POST | `/:courseId/rebuild-methodology` | Employee permission (`groups:manage`) |
 
-- `GET /forbidden/rules`
-- `POST /forbidden/rules`
-- `PATCH /forbidden/rules/:ruleId`
-- `DELETE /forbidden/rules/:ruleId`
-- `GET /forbidden/violations`
-- `POST /forbidden/violations`
-- `DELETE /forbidden/violations/:violationId`
+### 11.5 Homework (`/api/homework`)
 
-### Extra Lessons (`/extra-lessons`)
+| Method | Path | Access |
+|---|---|---|
+| GET | `/lessons/:lessonId` | Student token |
+| GET | `/lesson/:lessonId` | Student token (alias) |
+| POST | `/lessons/:lessonId/submissions` | Student token |
+| POST | `/lesson/:lessonId/submissions` | Student token (alias) |
+| GET | `/groupmates/grades` | Student token |
+| GET | `/submissions` | Employee token |
+| PATCH | `/submissions/:submissionId/grade` | Employee token |
 
-- `GET /extra-lessons/support-teachers`
-- `POST /extra-lessons/support-teachers/:userId`
-- `DELETE /extra-lessons/support-teachers/:userId`
-- `GET /extra-lessons/availability`
-- `POST /extra-lessons/book`
-- `GET /extra-lessons/my-lessons`
-- `GET /extra-lessons/requests`
-- `GET /extra-lessons`
-- `POST /extra-lessons`
-- `GET /extra-lessons/:lessonId`
-- `PATCH /extra-lessons/:lessonId`
-- `DELETE /extra-lessons/:lessonId`
-- `PATCH /extra-lessons/:lessonId/approve`
-- `PATCH /extra-lessons/:lessonId/deny`
-- `PATCH /extra-lessons/:lessonId/complete`
-- `POST /extra-lessons/:lessonId/students`
-- `DELETE /extra-lessons/:lessonId/students/:studentId`
+### 11.6 Finance (`/api/finance`)
 
-### Leads (`/leads`)
+| Method | Path | Access |
+|---|---|---|
+| GET | `/transactions` | Teacher/supporteacher/headteacher/admin/superadmin |
+| DELETE | `/transactions/:transactionId` | Admin/superadmin (returns immutable-flow errors) |
+| GET | `/employees` | Teacher/supporteacher/headteacher/admin/superadmin |
+| GET | `/employees/:employeeId` | Teacher/supporteacher/headteacher/admin/superadmin |
+| GET | `/employees/:employeeId/bonuses` | Teacher/supporteacher/headteacher/admin/superadmin |
+| GET | `/employees/:employeeId/fines` | Teacher/supporteacher/headteacher/admin/superadmin |
+| PATCH | `/employees/:employeeId/salary` | Admin/superadmin |
+| POST | `/employees/:employeeId/bonus` | Headteacher/admin/superadmin |
+| POST | `/employees/:employeeId/fine` | Headteacher/admin/superadmin |
+| GET | `/students/payments` | Teacher/supporteacher/headteacher/admin/superadmin |
+| POST | `/students/:studentId/payment` | Employee token |
+| GET | `/students/:studentId/payments` | Employee token |
 
-- `GET /leads`
-- `POST /leads`
-- `GET /leads/:leadId`
-- `PATCH /leads/:leadId`
-- `DELETE /leads/:leadId`
+### 11.7 Forbidden (`/api/forbidden`)
 
-## 10. Files And Uploads
+| Method | Path | Access |
+|---|---|---|
+| GET | `/rules` | Employee token |
+| POST | `/rules` | Employee token |
+| PATCH | `/rules/:ruleId` | Employee token |
+| DELETE | `/rules/:ruleId` | Employee token |
+| GET | `/violations` | Employee token |
+| POST | `/violations` | Employee token |
+| DELETE | `/violations/:violationId` | Employee token |
 
-- Uploaded files are stored in `uploads/`
-- Static file serving:
-  - `/uploads` -> uploaded files
-  - `/public` -> public assets
-- Upload middleware enforces file type and size:
-  - avatar: image only, <= 2 MB
-  - lesson/homework docs: <= 25 MB
-- URL normalization can return absolute links when `PUBLIC_BASE_URL` is set
+### 11.8 Extra Lessons (`/api/extra-lessons`)
 
-## 11. Error Contract
+| Method | Path | Access |
+|---|---|---|
+| GET | `/support-teachers` | Employee + permission (`users:read`) |
+| POST | `/support-teachers/:userId` | Employee + permission (`users:manage`) |
+| DELETE | `/support-teachers/:userId` | Employee + permission (`users:manage`) |
+| GET | `/availability` | Public |
+| POST | `/book` | Student token |
+| GET | `/my-lessons` | Student token |
+| GET | `/requests` | Employee token |
+| GET | `/` | Employee token |
+| POST | `/` | Employee token |
+| GET | `/:lessonId` | Employee token |
+| PATCH | `/:lessonId` | Employee token |
+| DELETE | `/:lessonId` | Employee token |
+| PATCH | `/:lessonId/approve` | Employee + permission (`groups:read`) |
+| PATCH | `/:lessonId/deny` | Employee + permission (`groups:read`) |
+| PATCH | `/:lessonId/cancel` | Employee + permission (`groups:manage`) |
+| PATCH | `/:lessonId/complete` | Employee + permission (`groups:read`) |
+| POST | `/:lessonId/students` | Employee token |
+| DELETE | `/:lessonId/students/:studentId` | Employee token |
 
-The API normalizes error responses to:
+### 11.9 Leads (`/api/leads`)
+
+| Method | Path | Access |
+|---|---|---|
+| GET | `/` | Employee token |
+| POST | `/` | Employee token |
+| GET | `/:leadId` | Employee token |
+| PATCH | `/:leadId` | Employee token |
+| DELETE | `/:leadId` | Employee token |
+
+---
+
+## 12. Uploads and Public URLs
+
+Upload storage:
+- Local folder: `uploads/`
+
+Upload middleware limits:
+- Avatar:
+  - field: `avatar`
+  - types: JPG/PNG/WEBP
+  - max size: 2 MB
+- Lesson documents:
+  - field: `document`
+  - document-like formats (`pdf`, `doc`, `docx`, `xls`, `xlsx`, `ppt`, `pptx`, `txt`, `csv`, `rtf`, `odt`, `ods`, `odp`, `zip`, `rar`)
+  - max size: 25 MB
+- Homework attachments:
+  - field: `document`
+  - lesson document types + images (`jpg`, `jpeg`, `png`, `webp`, `gif`)
+  - max size: 25 MB
+
+Public URL handling:
+- `toPublicUrl()` returns absolute URLs when `PUBLIC_BASE_URL` or `BASE_URL` is configured.
+- Otherwise URLs are derived from request host/protocol or kept as relative paths.
+
+---
+
+## 13. Error Contract
+
+The app normalizes non-2xx JSON responses to:
 
 ```json
 {
@@ -472,29 +621,65 @@ The API normalizes error responses to:
 }
 ```
 
-`AppError` + global middleware ensure consistent shape for validation and domain errors.
+Notes:
+- Default `code` is inferred from HTTP status when not provided.
+- `field` is set when validation can identify a specific field.
+- 500 responses are masked as `"Internal server error"` in the global handler.
 
-## 12. Tests
+---
 
-Run the included test scripts:
+## 14. Testing
+
+Run:
 
 ```bash
 npm test
 ```
 
 This executes:
-
 - `scripts/smoke.test.js`
 - `scripts/senior.test.js`
 
-## 13. Operational Notes
-
-- Server starts listening before DB connection is confirmed. If DB fails after retries, API process stays up but DB-backed endpoints fail until restart.
-- Roles are seeded on DB connect with upsert + `$set`, so manual permission edits can be overwritten on next startup.
-- Student balance reset helper exists as a service. In current codebase, reset checks are triggered from student/group controllers; scheduled job helper is present but not auto-started.
-- Finance events are intentionally immutable. Reversals are modeled as compensating events, not deletes.
-- Route `/api/auth/register` is currently not protected by `requireAuth`/`requireRegisterPermission` in `auth.routes.js`. If production policy requires superadmin-only registration, add the middleware guard.
+Coverage style:
+- Syntax sanity checks
+- Middleware behavior checks
+- Controller behavior with patched model methods
+- Core domain invariants (course/group/student/homework rules)
 
 ---
 
-For frontend-oriented API usage examples, see `README.frontend.md`.
+## 15. Operational Notes and Known Caveats
+
+- Server startup sequence:
+  - HTTP server starts immediately.
+  - DB connects in background with retries.
+  - If DB fails after all retries, server still listens but DB-backed endpoints fail until restart.
+
+- Role seed behavior:
+  - Default roles are upserted on every DB connect.
+  - Seeder uses `$set` for permissions, so local manual edits may be overwritten on restart.
+
+- Register route protection:
+  - Route-level middleware for superadmin-only register is not currently mounted in `auth.routes.js`.
+  - If production policy requires strict protection, add `requireAuth` + `requireRegisterPermission`.
+
+- Student balance reset:
+  - Scheduled helper exists in service, but auto-start is not wired from startup.
+  - Controllers trigger reset checks opportunistically.
+
+- Finance immutability:
+  - `FinancialEvent` updates/deletes are blocked at model level.
+  - Reversals are represented as compensating events.
+
+- Swagger route docs:
+  - Most endpoints are documented in route annotations.
+  - Some implementation details (for example extra-lesson `/cancel`) may need swagger annotation updates if strict parity is required.
+
+---
+
+## 16. Frontend Integration
+
+For frontend-oriented examples and integration notes, see:
+
+- `README.frontend.md`
+

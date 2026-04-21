@@ -2,7 +2,7 @@ const assert = require('assert')
 const fs = require('fs')
 const http = require('http')
 const path = require('path')
-const { spawnSync } = require('child_process')
+const vm = require('vm')
 
 const filesToCheck = [
 	'index.js',
@@ -32,12 +32,14 @@ const filesToCheck = [
 ]
 
 const checkSyntax = file => {
-	const check = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' })
-	assert.strictEqual(
-		check.status,
-		0,
-		`Syntax check failed for ${file}\n${check.stderr || check.stdout}`,
-	)
+	const absolutePath = path.join(process.cwd(), file)
+	const source = fs.readFileSync(absolutePath, 'utf8')
+
+	try {
+		new vm.Script(source, { filename: file })
+	} catch (error) {
+		assert.fail(`Syntax check failed for ${file}\n${error.message}`)
+	}
 }
 
 const makeRequest = (port, path) =>
@@ -62,20 +64,60 @@ const run = async () => {
 		hasPermission,
 		extractBearerToken,
 		requireRegisterPermission,
+		invalidateRolePermissionsCache,
 	} = require('../src/middleware/auth.middleware')
 	const { generateAccessToken } = require('../src/utils/token')
 	const User = require('../src/model/user.model')
+	const Role = require('../src/models/Role.model')
 
 	process.env.JWT_ACCESS_SECRET = process.env.JWT_ACCESS_SECRET || 'smoke-access-secret'
 	process.env.JWT_SECRET = process.env.JWT_SECRET || process.env.JWT_ACCESS_SECRET
 
-	assert.strictEqual(hasPermission('superadmin', 'users:manage_roles'), true)
-	assert.strictEqual(hasPermission('admin', 'users:manage_roles'), true)
-	assert.strictEqual(hasPermission('teacher', 'users:read'), false)
-	assert.strictEqual(hasPermission('admin', 'students:manage'), true)
-	assert.strictEqual(hasPermission('headteacher', 'students:manage'), true)
-	assert.strictEqual(hasPermission('teacher', 'students:manage'), false)
-	assert.strictEqual(hasPermission('teacher', 'students:read'), true)
+	const originalRoleFind = Role.find
+	Role.find = () => ({
+		select: async () => [
+			{ name: 'teacher', permissions: ['profile:read', 'students:read', 'groups:read'] },
+			{ name: 'supporteacher', permissions: ['profile:read', 'students:read', 'groups:read'] },
+			{
+				name: 'headteacher',
+				permissions: [
+					'profile:read',
+					'users:read',
+					'students:read',
+					'students:manage',
+					'groups:read',
+					'groups:manage',
+				],
+			},
+			{
+				name: 'admin',
+				permissions: [
+					'profile:read',
+					'users:read',
+					'users:manage',
+					'users:manage_roles',
+					'students:read',
+					'students:manage',
+					'groups:read',
+					'groups:manage',
+				],
+			},
+			{ name: 'superadmin', permissions: ['*'] },
+		],
+	})
+	invalidateRolePermissionsCache()
+	try {
+		assert.strictEqual(await hasPermission('superadmin', 'users:manage_roles'), true)
+		assert.strictEqual(await hasPermission('admin', 'users:manage_roles'), true)
+		assert.strictEqual(await hasPermission('teacher', 'users:read'), false)
+		assert.strictEqual(await hasPermission('admin', 'students:manage'), true)
+		assert.strictEqual(await hasPermission('headteacher', 'students:manage'), true)
+		assert.strictEqual(await hasPermission('teacher', 'students:manage'), false)
+		assert.strictEqual(await hasPermission('teacher', 'students:read'), true)
+	} finally {
+		Role.find = originalRoleFind
+		invalidateRolePermissionsCache()
+	}
 	assert.strictEqual(extractBearerToken(`Bearer abc.def.ghi`), 'abc.def.ghi')
 	assert.strictEqual(extractBearerToken(`bearer abc.def.ghi`), 'abc.def.ghi')
 	assert.strictEqual(extractBearerToken(`BEARER abc.def.ghi`), 'abc.def.ghi')
@@ -216,7 +258,10 @@ const run = async () => {
 
 		const notFound = await makeRequest(port, '/missing-route')
 		assert.strictEqual(notFound.statusCode, 404)
-		assert.strictEqual(notFound.body, '{"message":"Route not found"}')
+		const notFoundPayload = JSON.parse(notFound.body)
+		assert.strictEqual(notFoundPayload.message, 'Route not found')
+		assert.strictEqual(notFoundPayload.code, 'ROUTE_NOT_FOUND')
+		assert.strictEqual(notFoundPayload.field, null)
 	} finally {
 		server.close()
 	}

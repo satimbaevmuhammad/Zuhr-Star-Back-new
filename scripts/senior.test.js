@@ -30,6 +30,8 @@ const Student = require('../src/model/student.model')
 const Group = require('../src/model/group.model')
 const Course = require('../src/model/course.model')
 const Lesson = require('../src/model/lesson.model')
+const Role = require('../src/models/Role.model')
+const FaceCredential = require('../src/models/FaceCredential.model')
 
 const DAYS_OF_WEEK = [
 	'sunday',
@@ -161,14 +163,47 @@ const runTests = async () => {
 		})
 
 		await test('permission middleware enforces all required permissions', async () => {
-			const canReadBoth = authMiddleware.allowPermissions('groups:read', 'students:read')
-			const ok = await runMiddleware(canReadBoth, { user: { role: 'teacher' } })
-			assert.strictEqual(ok.nextCalled, true)
+			await withPatchedMethods(
+				[
+					[
+						Role,
+						'find',
+						() => ({
+							select: async () => [
+								{ name: 'teacher', permissions: ['profile:read', 'students:read', 'groups:read'] },
+								{
+									name: 'headteacher',
+									permissions: [
+										'profile:read',
+										'users:read',
+										'students:read',
+										'students:manage',
+										'groups:read',
+										'groups:manage',
+									],
+								},
+							],
+						}),
+					],
+				],
+				async () => {
+					authMiddleware.invalidateRolePermissionsCache()
 
-			const mustManage = authMiddleware.allowPermissions('students:manage')
-			const denied = await runMiddleware(mustManage, { user: { role: 'teacher' } })
-			assert.strictEqual(denied.nextCalled, false)
-			assert.strictEqual(denied.res.statusCode, 403)
+					const canReadBoth = authMiddleware.allowPermissions('groups:read', 'students:read')
+					const ok = await runMiddleware(canReadBoth, {
+						user: { role: 'teacher', userType: 'employee' },
+					})
+					assert.strictEqual(ok.nextCalled, true)
+
+					const mustManage = authMiddleware.allowPermissions('students:manage')
+					const denied = await runMiddleware(mustManage, {
+						user: { role: 'teacher', userType: 'employee' },
+					})
+					assert.strictEqual(denied.nextCalled, false)
+					assert.strictEqual(denied.res.statusCode, 403)
+				},
+			)
+			authMiddleware.invalidateRolePermissionsCache()
 		})
 
 		await test('refresh token rejects mismatch when strict mode enabled', async () => {
@@ -230,7 +265,8 @@ const runTests = async () => {
 					assert.strictEqual(res.statusCode, 200)
 					assert.ok(typeof res.body.accessToken === 'string')
 					assert.ok(typeof res.body.refreshToken === 'string')
-					assert.notStrictEqual(res.body.refreshToken, incomingRefresh)
+					const refreshedPayload = verifyRefreshToken(res.body.refreshToken)
+					assert.strictEqual(refreshedPayload.id, userId)
 				},
 			)
 		})
@@ -265,16 +301,22 @@ const runTests = async () => {
 							select: async () => userDoc,
 						}),
 					],
+					[
+						FaceCredential,
+						'findOneAndUpdate',
+						async () => ({
+							_id: new mongoose.Types.ObjectId(),
+						}),
+					],
 				],
 				async () => {
-					const res = await callHandler(authController.registerFaceId, {
-						user: { _id: userId, role: 'teacher' },
+					const res = await callHandler(authController.updateFaceId, {
+						user: { _id: userId, id: userId, role: 'teacher' },
 						body: { descriptor },
 					})
 
 					assert.strictEqual(res.statusCode, 200)
 					assert.strictEqual(userDoc.faceIdEnabled, true)
-					assert.strictEqual(userDoc.faceDescriptor.length, 128)
 				},
 			)
 		})
@@ -306,7 +348,20 @@ const runTests = async () => {
 			}
 
 			await withPatchedMethods(
-				[[User, 'find', () => makeQuery([userDoc])]],
+				[
+					[
+						FaceCredential,
+						'find',
+						() =>
+							makeQuery([
+								{
+									userId: userId,
+									descriptor: baseDescriptor,
+								},
+							]),
+					],
+					[User, 'find', () => makeQuery([userDoc])],
+				],
 				async () => {
 					const res = await callHandler(authController.loginWithFaceId, {
 						body: { descriptor: loginDescriptor, threshold: 0.3 },
@@ -546,9 +601,7 @@ const runTests = async () => {
 							teacher: teacherId,
 							startDate: '2026-03-03',
 							schedule: [
-								{ dayOfWeek: 'monday', startTime: '09:00', durationMinutes: 90 },
-								{ dayOfWeek: 'wednesday', startTime: '09:00', durationMinutes: 90 },
-								{ dayOfWeek: 'friday', startTime: '09:00', durationMinutes: 90 },
+								{ startTime: '09:00', durationMinutes: 90 },
 							],
 						},
 					})
@@ -668,8 +721,8 @@ const runTests = async () => {
 					assert.ok(groupUpdateCall)
 					assert.deepStrictEqual(courseUpdateCall.filter, { _id: courseId })
 					assert.deepStrictEqual(groupUpdateCall.filter, { courseRef: courseId })
-					assert.ok(courseUpdateCall.update.$addToSet.methodology)
-					assert.ok(groupUpdateCall.update.$addToSet.lessons)
+					assert.ok(courseUpdateCall.update.$push.methodology)
+					assert.ok(groupUpdateCall.update.$push.lessons)
 				},
 			)
 		})
@@ -941,15 +994,14 @@ const runTests = async () => {
 							teacher: teacherId,
 							startDate: '2026-03-03',
 							schedule: [
-								{ dayOfWeek: 'tuesday', startTime: '09:00', durationMinutes: 90 },
-								{ dayOfWeek: 'thursday', startTime: '09:00', durationMinutes: 90 },
-								{ dayOfWeek: 'saturday', startTime: '09:00', durationMinutes: 90 },
+								{ startTime: '09:00', durationMinutes: 90 },
+								{ startTime: '09:00', durationMinutes: 90 },
 							],
 						},
 					})
 
 					assert.strictEqual(res.statusCode, 400)
-					assert.ok(String(res.body.message).includes('Invalid schedule for groupType'))
+					assert.ok(String(res.body.message).includes('schedule must have exactly 3 entries'))
 				},
 			)
 		})

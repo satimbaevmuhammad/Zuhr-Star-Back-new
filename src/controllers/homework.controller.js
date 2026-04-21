@@ -634,74 +634,57 @@ exports.submitStudentHomework = async (req, res) => {
 			})
 		}
 
-		let submission = await HomeworkSubmission.findOne({
+		const submissionFilter = {
 			lesson: lessonId,
 			student: req.student._id,
-		})
-
-		const isNewSubmission = !submission
-		if (submission && submission.status === 'approved') {
+		}
+		const existingSubmission = await HomeworkSubmission.findOne(submissionFilter).select(
+			'status documents',
+		)
+		if (existingSubmission && existingSubmission.status === 'approved') {
 			safeUnlinkIfExists(uploadedFilePath)
-			return res.status(409).json({ message: 'Homework already approved' })
+			return res.status(400).json({
+				message: 'Cannot resubmit an already approved homework',
+				code: 'HOMEWORK_ALREADY_APPROVED',
+			})
 		}
 
-		if (!submission) {
-			submission = new HomeworkSubmission({
-				lesson: lessonId,
-				student: req.student._id,
-				group: groupResult.group._id,
-			})
-		} else {
-			if (!Array.isArray(submission.history)) {
-				submission.history = []
-			}
-			submission.history.push({
-				description: String(submission.description || '').trim(),
-				links: Array.isArray(submission.links) ? [...submission.links] : [],
-				documents: Array.isArray(submission.documents)
-					? submission.documents.map(document => ({
-						name: String(document.originalName || document.filename || '').trim(),
-						url: String(document.url || '').trim(),
-					}))
-					: [],
-				submittedAt: submission.submittedAt || new Date(),
-			}) // FIX [5]: Preserve previous top-level submission payload in history before resubmit overwrite
+		const isNewSubmission = !existingSubmission
+		// Use upsert to satisfy unique (lesson, student) while allowing resubmission updates.
+		const updatePayload = {
+			lesson: lessonId,
+			student: req.student._id,
+			group: groupResult.group._id,
+			status: 'submitted',
+			description: typeof description === 'undefined' ? '' : description,
+			links: typeof links === 'undefined' ? [] : links,
+			updatedAt: new Date(),
+			submittedAt: new Date(),
+		}
+		if (req.file) {
+			updatePayload.documents = [buildSubmissionDocumentPayload(req.file)]
+		}
 
-			for (const document of submission.documents || []) {
-				const filename = String(document.filename || '').trim()
+		const submission = await HomeworkSubmission.findOneAndUpdate(
+			submissionFilter,
+			{ $set: updatePayload },
+			{
+				new: true,
+				upsert: true,
+				runValidators: true,
+				setDefaultsOnInsert: true,
+			},
+		)
+
+		if (existingSubmission && Array.isArray(existingSubmission.documents)) {
+			for (const document of existingSubmission.documents) {
+				const filename = String(document?.filename || '').trim()
 				if (filename) {
 					safeUnlinkIfExists(path.join(process.cwd(), 'uploads', filename))
 				}
 			}
-			if (submission.score !== null || submission.checkedAt) {
-				submission.attemptsCount += 1
-			}
-			submission.documents = []
-			submission.links = []
-			submission.description = ''
 		}
 
-		submission.lesson = lessonId // FIX [5]: Always bind submission record to current lesson on create/resubmit
-		submission.status = 'submitted'
-		submission.score = null
-		submission.checkedBy = null
-		submission.checkedAt = null
-		submission.submittedAt = new Date()
-		submission.group = groupResult.group._id
-
-		if (typeof description !== 'undefined') {
-			submission.description = description
-		}
-
-		if (typeof links !== 'undefined') {
-			submission.links = links
-		}
-
-		if (req.file) {
-			submission.documents.push(buildSubmissionDocumentPayload(req.file))
-		}
-
-		await submission.save()
 		await Student.updateOne(
 			{ _id: req.student._id },
 			{ $addToSet: { homeworks: submission._id } },
