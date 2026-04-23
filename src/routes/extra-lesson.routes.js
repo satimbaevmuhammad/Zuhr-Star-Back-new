@@ -19,7 +19,7 @@ const router = express.Router()
  * /api/extra-lessons/support-teachers:
  *   get:
  *     tags: [ExtraLessons]
- *     summary: List designated extra-lesson support teachers (max 3)
+ *     summary: List designated extra-lesson support teachers
  *     security:
  *       - bearerAuth: []
  *     responses:
@@ -32,9 +32,6 @@ const router = express.Router()
  *               properties:
  *                 total:
  *                   type: integer
- *                 max:
- *                   type: integer
- *                   example: 3
  *                 data:
  *                   type: array
  */
@@ -51,7 +48,7 @@ router.get(
  *   post:
  *     tags: [ExtraLessons]
  *     summary: Assign a user as an extra-lesson support teacher
- *     description: Marks a user as a support teacher. Maximum 3 at a time.
+ *     description: Marks a user as a support teacher.
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -64,7 +61,7 @@ router.get(
  *       200:
  *         description: User assigned as support teacher
  *       409:
- *         description: Already 3 support teachers assigned, or user is already a support teacher
+ *         description: User is already a support teacher
  *       404:
  *         description: User not found
  *   delete:
@@ -99,25 +96,29 @@ router.delete(
 	extraLessonController.removeSupportTeacher,
 )
 
-// ─── AVAILABILITY (PUBLIC) ────────────────────────────────────────────────────
+// ─── AVAILABILITY (STUDENT AUTH) ────────────────────────────────────────────────────
 
 /**
  * @swagger
  * /api/extra-lessons/availability:
  *   get:
  *     tags: [ExtraLessons]
- *     summary: Get a support teacher's available slots for a given date
+ *     summary: Get available slots for your group's support teacher
  *     description: |
- *       Returns all 5 daily slots (14:00 / 15:10 / 16:20 / 17:30 / 18:40 local UTC+5)
- *       with an `isFree` flag for each. No authentication required — students can
- *       browse availability before booking.
+ *       Returns all 5 daily slots (14:00 / 15:10 / 16:20 / 17:30 / 18:40 local UTC+5).
+ *       Requires student authentication and only allows teachers assigned to the
+ *       student's group(s).
+ *     security:
+ *       - studentBearerAuth: []
  *     parameters:
  *       - in: query
  *         name: teacherId
- *         required: true
+ *         required: false
  *         schema:
  *           type: string
- *         description: MongoDB ObjectId of the support teacher
+ *         description: |
+ *           MongoDB ObjectId of the support teacher. Required only when the
+ *           student belongs to multiple groups with different support teachers.
  *       - in: query
  *         name: date
  *         schema:
@@ -699,3 +700,4 @@ router.delete(
 )
 
 module.exports = router
+

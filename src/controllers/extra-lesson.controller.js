@@ -6,7 +6,6 @@ const {
 	TIMEZONE_OFFSET_MINUTES,
 	VALID_SLOT_TIMES_LOCAL,
 	MAX_STUDENTS_PER_LESSON,
-	MAX_SUPPORT_TEACHERS,
 } = require('../model/extra-lesson.model')
 const User = require('../model/user.model')
 const Student = require('../model/student.model')
@@ -397,7 +396,6 @@ exports.listSupportTeachers = async (req, res) => {
 		)
 		return res.status(200).json({
 			total: teachers.length,
-			max: MAX_SUPPORT_TEACHERS,
 			data: teachers,
 		})
 	} catch (error) {
@@ -410,13 +408,6 @@ exports.assignSupportTeacher = async (req, res) => {
 		const userId = parseObjectIdString(req.params.userId)
 
 		const assignedUser = await runWithOptionalTransaction(async session => {
-			const countQuery = User.countDocuments({ isExtraLessonSupport: true })
-			applySession(countQuery, session)
-			const supporteacherCount = await countQuery
-			if (supporteacherCount >= MAX_SUPPORT_TEACHERS) {
-				throw createHttpError(409, 'Support teacher limit reached', 'SUPPORT_TEACHER_LIMIT')
-			}
-
 			const updateQuery = User.findOneAndUpdate(
 				{ _id: userId, isExtraLessonSupport: false },
 				{ $set: { isExtraLessonSupport: true } },

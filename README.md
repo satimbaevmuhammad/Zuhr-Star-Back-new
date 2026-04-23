@@ -381,12 +381,12 @@ Important current behavior:
 - Limits:
   - max 5 lessons per teacher/day
   - max 3 students per lesson
-  - max 3 designated support teachers globally
+  - designated support teachers globally (no limit)
 - Status flow:
   - `pending_approval` -> `confirmed` -> `completed`
   - `pending_approval` -> `cancelled`
   - `confirmed` -> `cancelled` (manager cancel route)
-- Public availability check endpoint (no auth)
+- Availability check endpoint requires student auth
 - Supports student-request flow and teacher-created direct confirmed flow
 
 ### 9.9 Leads (CRM)
@@ -682,4 +682,3 @@ Coverage style:
 For frontend-oriented examples and integration notes, see:
 
 - `README.frontend.md`
-

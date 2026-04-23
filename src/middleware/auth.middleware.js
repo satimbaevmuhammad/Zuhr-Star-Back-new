@@ -14,18 +14,48 @@ const authError = (res, message, code = 'UNAUTHORIZED') => {
 	return res.status(401).json({ message, code })
 }
 
+const JWT_SEGMENT_PATTERN = /^[A-Za-z0-9\-_]+$/
+
+const isLikelyJwt = token => {
+	if (typeof token !== 'string') {
+		return false
+	}
+
+	const segments = token.split('.')
+	if (segments.length !== 3) {
+		return false
+	}
+
+	return segments.every(segment => segment.length > 0 && JWT_SEGMENT_PATTERN.test(segment))
+}
+
 const extractBearerToken = authHeader => {
 	if (typeof authHeader !== 'string') {
 		return null
 	}
 
-	const match = authHeader.trim().match(/^Bearer\s+(.+)$/i)
-	if (!match || !match[1]) {
+	const normalizedHeader = authHeader.trim()
+	if (!normalizedHeader) {
 		return null
 	}
 
-	const token = match[1].trim()
-	return token || null
+	const match = normalizedHeader.match(/^Bearer\s+(.+)$/i)
+	if (match && match[1]) {
+		const token = match[1].trim()
+		return token || null
+	}
+
+	// Compatibility: accept raw JWT value when clients send header without "Bearer " prefix.
+	return isLikelyJwt(normalizedHeader) ? normalizedHeader : null
+}
+
+const resolveAccessTokenFromRequest = req => {
+	return (
+		extractBearerToken(req.headers?.authorization) ||
+		extractBearerToken(req.headers?.['x-access-token']) ||
+		extractBearerToken(req.headers?.token) ||
+		null
+	)
 }
 
 const normalizeRoleInput = value => {
@@ -94,7 +124,7 @@ const hasPermission = async (role, permission) => {
 
 const verifyToken = async (req, res, next) => {
 	try {
-		const token = extractBearerToken(req.headers?.authorization)
+		const token = resolveAccessTokenFromRequest(req)
 		if (!token) {
 			return authError(res, 'Authorization token missing', 'TOKEN_MISSING')
 		}
@@ -292,7 +322,7 @@ const removeUploadedFileIfAny = req => {
 const requireRegisterPermission = (req, res, next) => {
 	const requestedRole = normalizeRoleInput(req.body.role || 'teacher')
 
-	const token = extractBearerToken(req.headers?.authorization)
+	const token = resolveAccessTokenFromRequest(req)
 	if (!token) {
 		removeUploadedFileIfAny(req)
 		return authError(res, 'Authorization token missing', 'TOKEN_MISSING')

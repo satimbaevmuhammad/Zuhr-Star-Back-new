@@ -37,9 +37,6 @@ const EXTRA_LESSON_STATUSES = ['pending_approval', 'confirmed', 'cancelled', 'co
 // Maximum number of students per extra lesson (teacher can add 2–3 students).
 const MAX_STUDENTS_PER_LESSON = 3
 
-// Maximum number of globally designated support teachers allowed.
-const MAX_SUPPORT_TEACHERS = 3
-
 // ─── SCHEMA ───────────────────────────────────────────────────────────────────
 
 // Sub-document for enrolled students. Tracks who added them and when.
@@ -212,6 +209,5 @@ module.exports = {
 	VALID_SLOT_TIMES_LOCAL,
 	VALID_SLOT_MINUTES_LOCAL,
 	MAX_STUDENTS_PER_LESSON,
-	MAX_SUPPORT_TEACHERS,
 	EXTRA_LESSON_STATUSES,
 }

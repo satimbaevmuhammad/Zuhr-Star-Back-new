@@ -39,6 +39,11 @@ const options = {
 					scheme: 'bearer',
 					bearerFormat: 'JWT',
 				},
+				studentBearerAuth: {
+					type: 'http',
+					scheme: 'bearer',
+					bearerFormat: 'JWT',
+				},
 			},
 			schemas: {
 				ErrorResponse: {
