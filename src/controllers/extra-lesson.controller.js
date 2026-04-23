@@ -10,6 +10,7 @@ const {
 } = require('../model/extra-lesson.model')
 const User = require('../model/user.model')
 const Student = require('../model/student.model')
+const Group = require('../model/group.model')
 
 const TIMEZONE_OFFSET_MS = TIMEZONE_OFFSET_MINUTES * 60 * 1000
 const SLOT_SET = new Set(VALID_SLOT_TIMES_LOCAL)
@@ -322,6 +323,9 @@ const assertSupportTeacher = async ({ teacherId, session }) => {
 	if (!teacher) {
 		throw createHttpError(404, 'Teacher not found', 'NOT_FOUND', 'teacherId')
 	}
+	if (teacher.role !== 'supporteacher') {
+		throw createHttpError(400, 'Specified user must have supporteacher role', 'BAD_REQUEST', 'teacherId')
+	}
 	if (!teacher.isExtraLessonSupport) {
 		throw createHttpError(400, 'Specified user is not a support teacher', 'BAD_REQUEST', 'teacherId')
 	}
@@ -340,6 +344,50 @@ const ensureLessonExists = async lessonId => {
 		throw createHttpError(404, 'Extra lesson not found', 'NOT_FOUND')
 	}
 	return lesson
+}
+
+const getGroupSupporteacherIds = group => {
+	const supporteacherIds = []
+	if (!Array.isArray(group?.supportTeachers)) {
+		return supporteacherIds
+	}
+
+	for (const teacherId of group.supportTeachers) {
+		const normalizedTeacherId = parseObjectIdString(teacherId)
+		if (normalizedTeacherId) {
+			supporteacherIds.push(normalizedTeacherId)
+		}
+	}
+
+	return supporteacherIds
+}
+
+const getStudentSupporteacherIds = async studentId => {
+	const groups = await Group.find({ students: studentId }).select('supportTeachers').lean()
+	const teacherIdSet = new Set()
+
+	for (const group of groups) {
+		const groupTeacherIds = getGroupSupporteacherIds(group)
+		for (const teacherId of groupTeacherIds) {
+			if (mongoose.isValidObjectId(teacherId)) {
+				teacherIdSet.add(teacherId)
+			}
+		}
+	}
+
+	const candidateTeacherIds = [...teacherIdSet]
+	if (candidateTeacherIds.length === 0) {
+		return []
+	}
+
+	const allowedSupporteacherUsers = await User.find({
+		_id: { $in: candidateTeacherIds },
+		role: 'supporteacher',
+	})
+		.select('_id')
+		.lean()
+
+	return allowedSupporteacherUsers.map(user => String(user._id))
 }
 
 exports.listSupportTeachers = async (req, res) => {
@@ -364,8 +412,8 @@ exports.assignSupportTeacher = async (req, res) => {
 		const assignedUser = await runWithOptionalTransaction(async session => {
 			const countQuery = User.countDocuments({ isExtraLessonSupport: true })
 			applySession(countQuery, session)
-			const supportTeacherCount = await countQuery
-			if (supportTeacherCount >= MAX_SUPPORT_TEACHERS) {
+			const supporteacherCount = await countQuery
+			if (supporteacherCount >= MAX_SUPPORT_TEACHERS) {
 				throw createHttpError(409, 'Support teacher limit reached', 'SUPPORT_TEACHER_LIMIT')
 			}
 
@@ -430,9 +478,9 @@ exports.removeSupportTeacher = async (req, res) => {
 
 exports.getAvailability = async (req, res) => {
 	try {
-		const teacherId = parseObjectIdString(req.query.teacherId)
-		if (!teacherId || !mongoose.isValidObjectId(teacherId)) {
-			return sendError(res, 400, 'Valid teacherId query param is required', 'BAD_REQUEST', 'teacherId')
+		const studentId = parseObjectIdString(req.student?._id)
+		if (!studentId || !mongoose.isValidObjectId(studentId)) {
+			return sendError(res, 401, 'Invalid student token', 'UNAUTHORIZED')
 		}
 
 		const localDate = req.query.date
@@ -442,12 +490,35 @@ exports.getAvailability = async (req, res) => {
 			return sendError(res, 400, 'date must be in YYYY-MM-DD format', 'BAD_REQUEST', 'date')
 		}
 
-		const teacher = await User.findById(teacherId).select('fullname isExtraLessonSupport')
+		const supporteacherIds = await getStudentSupporteacherIds(studentId)
+		if (supporteacherIds.length === 0) {
+			return res.status(403).json({
+				message: "You can only book extra lessons with your own group's support teacher",
+				code: 'FORBIDDEN_SUPPORT_TEACHER',
+			})
+		}
+		const requestedTeacherId = parseObjectIdString(req.query.teacherId)
+		let teacherId = requestedTeacherId
+
+		if (requestedTeacherId) {
+			if (!mongoose.isValidObjectId(requestedTeacherId)) {
+				return sendError(res, 400, 'Valid teacherId query param is required', 'BAD_REQUEST', 'teacherId')
+			}
+			if (!supporteacherIds.includes(requestedTeacherId)) {
+				return res.status(403).json({
+					message: "You can only book extra lessons with your own group's support teacher",
+					code: 'FORBIDDEN_SUPPORT_TEACHER',
+				})
+			}
+		} else if (supporteacherIds.length === 1) {
+			teacherId = supporteacherIds[0]
+		} else {
+			return sendError(res, 400, 'Valid teacherId query param is required', 'BAD_REQUEST', 'teacherId')
+		}
+
+		const teacher = await User.findById(teacherId).select('fullname')
 		if (!teacher) {
 			return sendError(res, 404, 'Teacher not found', 'NOT_FOUND', 'teacherId')
-		}
-		if (!teacher.isExtraLessonSupport) {
-			return sendError(res, 400, 'Specified user is not a support teacher', 'BAD_REQUEST', 'teacherId')
 		}
 
 		const { startUtc, endUtc } = localDateToUtcRange(localDate)
@@ -489,6 +560,20 @@ exports.bookLesson = async (req, res) => {
 		if (!teacherId || !mongoose.isValidObjectId(teacherId)) {
 			return sendError(res, 400, 'Valid teacherId is required', 'BAD_REQUEST', 'teacherId')
 		}
+
+		const studentId = String(req.student?._id || '')
+		if (!studentId) {
+			return sendError(res, 401, 'Invalid student token', 'UNAUTHORIZED')
+		}
+
+		const supporteacherIds = await getStudentSupporteacherIds(studentId)
+		if (!supporteacherIds.includes(teacherId)) {
+			return res.status(403).json({
+				message: "You can only book extra lessons with your own group's support teacher",
+				code: 'FORBIDDEN_SUPPORT_TEACHER',
+			})
+		}
+
 		if (
 			typeof req.body.date === 'undefined' &&
 			typeof req.body.slot === 'undefined' &&
@@ -509,11 +594,6 @@ exports.bookLesson = async (req, res) => {
 
 		if (isSlotDateInPast(schedule.scheduledAt)) {
 			return sendError(res, 400, 'Cannot book a lesson in the past', 'PAST_SLOT', 'date')
-		}
-
-		const studentId = String(req.student?._id || '')
-		if (!studentId) {
-			return sendError(res, 401, 'Invalid student token', 'UNAUTHORIZED')
 		}
 
 		await assertSupportTeacher({ teacherId })

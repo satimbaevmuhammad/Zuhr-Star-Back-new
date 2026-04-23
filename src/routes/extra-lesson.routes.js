@@ -162,7 +162,7 @@ router.delete(
  *       404:
  *         description: Teacher not found
  */
-router.get('/availability', extraLessonController.getAvailability)
+router.get('/availability', requireStudentAuth, extraLessonController.getAvailability)
 
 // ─── STUDENT BOOKING ──────────────────────────────────────────────────────────
 
