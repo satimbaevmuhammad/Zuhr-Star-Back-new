@@ -6,7 +6,7 @@
 const jwt = require('jsonwebtoken')
 
 const JWT_ALGORITHM = 'HS256'
-const EMPLOYEE_ACCESS_EXPIRES_IN = '24h'
+const EMPLOYEE_ACCESS_EXPIRES_IN = '23h'
 const EMPLOYEE_REFRESH_EXPIRES_IN = '7d'
 const STUDENT_ACCESS_EXPIRES_IN = '24h'
 const STUDENT_REFRESH_EXPIRES_IN = '7d'
