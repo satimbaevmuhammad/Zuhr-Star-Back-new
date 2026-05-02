@@ -110,6 +110,7 @@ router.delete(
  *       student's group(s).
  *     security:
  *       - studentBearerAuth: []
+ *       - bearerAuth: []
  *     parameters:
  *       - in: query
  *         name: teacherId
@@ -140,6 +141,11 @@ router.delete(
  *                   type: string
  *                 teacher:
  *                   type: object
+ *                   properties:
+ *                     _id:
+ *                       type: string
+ *                     fullname:
+ *                       type: string
  *                 lessonsToday:
  *                   type: integer
  *                 remainingSlots:
@@ -180,6 +186,7 @@ router.get('/availability', requireStudentAuth, extraLessonController.getAvailab
  *       (14:00, 15:10, 16:20, 17:30, 18:40 local UTC+5).
  *     security:
  *       - studentBearerAuth: []
+ *       - bearerAuth: []
  *     requestBody:
  *       required: true
  *       content:
@@ -221,6 +228,7 @@ router.post('/book', requireStudentAuth, extraLessonController.bookLesson)
  *     summary: Student retrieves their own extra lessons
  *     security:
  *       - studentBearerAuth: []
+ *       - bearerAuth: []
  *     parameters:
  *       - in: query
  *         name: status

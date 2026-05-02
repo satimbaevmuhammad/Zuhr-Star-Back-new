@@ -528,16 +528,23 @@ exports.getAvailability = async (req, res) => {
 		const slots = VALID_SLOT_TIMES_LOCAL.map(slot => {
 			const scheduledAt = localDateAndSlotToUtcDate(localDate, slot)
 			const bookedCount = slotBookingCounts.get(slot) || 0
+			const isFree = bookedCount === 0 && !isSlotDateInPast(scheduledAt)
 			return {
-				slot,
-				bookedCount,
-				available: bookedCount === 0 && !isSlotDateInPast(scheduledAt),
+				scheduledAt: scheduledAt.toISOString(),
+				localTime: slot,
+				isFree,
 			}
 		})
+
+		const lessonsToday = lessons.length
+		const remainingSlots = slots.filter(s => s.isFree).length
 
 		return res.status(200).json({
 			teacherId,
 			date: localDate,
+			teacher: { _id: teacher._id, fullname: teacher.fullname },
+			lessonsToday,
+			remainingSlots,
 			slots,
 		})
 	} catch (error) {
