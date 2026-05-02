@@ -12,7 +12,7 @@ const STUDENT_ACCESS_EXPIRES_IN = '24h'
 const STUDENT_REFRESH_EXPIRES_IN = '7d'
 
 const resolveSecret = () =>
-	process.env.JWT_SECRET || process.env.JWT_ACCESS_SECRET
+	process.env.JWT_ACCESS_SECRET || process.env.JWT_SECRET
 
 const ensureSecret = () => {
 	const secret = resolveSecret()
