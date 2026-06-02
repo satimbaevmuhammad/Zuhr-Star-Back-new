@@ -1,0 +1,183 @@
+const mongoose = require('mongoose')
+
+const allowedRoles = ['teacher', 'supporteacher', 'headteacher', 'admin', 'superadmin']
+
+const forbidenEntrySchema = new mongoose.Schema(
+	{
+		rule: {
+			type: mongoose.Schema.Types.ObjectId,
+			ref: 'ForbiddenRule',
+			required: true,
+		},
+		violationId: {
+			type: mongoose.Schema.Types.ObjectId,
+			ref: 'EmployeeViolation',
+			required: true,
+		},
+		ruleName: { type: String, required: true },
+		fineAmount: { type: Number, default: 0 },
+		note: { type: String, maxlength: 500 },
+		recordedAt: { type: Date, default: Date.now },
+	},
+	{ _id: false },
+)
+
+const locationSchema = new mongoose.Schema(
+	{
+		type: {
+			type: String,
+			enum: ['Point'],
+			required: true,
+		},
+		coordinates: {
+			type: [Number],
+			required: true,
+			validate: {
+				validator: value =>
+					Array.isArray(value) &&
+					value.length === 2 &&
+					Number.isFinite(value[0]) &&
+					Number.isFinite(value[1]) &&
+					value[0] >= -180 &&
+					value[0] <= 180 &&
+					value[1] >= -90 &&
+					value[1] <= 90,
+				message:
+					'Location coordinates must be [longitude, latitude] with valid ranges',
+			},
+		},
+	},
+	{ _id: false },
+)
+
+const userSchema = new mongoose.Schema(
+	{
+		fullname: {
+			type: String,
+			required: true,
+			trim: true,
+			minlength: 2,
+			maxlength: 120,
+		},
+		phone: {
+			type: String,
+			required: true,
+			unique: true,
+			trim: true,
+			match: [/^\+?[0-9]{7,15}$/, 'Phone must contain 7-15 digits'],
+		},
+		email: {
+			type: String,
+			required: true,
+			unique: true,
+			trim: true,
+			lowercase: true,
+			match: [/^[^\s@]+@[^\s@]+\.[^\s@]+$/, 'Invalid email format'],
+		},
+		refreshToken: {
+			type: String,
+			default: null,
+			select: false,
+		},
+		dateOfBirth: {
+			type: Date,
+			required: true,
+		},
+		gender: {
+			type: String,
+			required: true,
+			enum: ['male', 'female'],
+		},
+		password: {
+			type: String,
+			required: true,
+			select: false,
+		},
+		role: {
+			type: String,
+			enum: allowedRoles,
+			default: 'teacher',
+		},
+		company: {
+			type: String,
+			trim: true,
+			maxlength: 120,
+		},
+		location: {
+			type: locationSchema,
+			default: undefined,
+		},
+		faceIdEnabled: {
+			type: Boolean,
+			default: false,
+		},
+		imgURL: {
+			type: String,
+			default: '/uploads/default-avatar.png',
+		},
+		workSchedule: {
+			startTime: { type: String, default: '14:00' },
+			endTime: { type: String, default: '20:00' },
+		},
+		forbidens: {
+			type: [forbidenEntrySchema],
+			default: [],
+		},
+		salary: {
+			type: Number,
+			default: 0,
+			min: 0,
+		},
+		isExtraLessonSupport: {
+			type: Boolean,
+			default: false,
+		},
+		// Unified achievements array: certificates, badges, and other recognitions
+		achievements: {
+			type: [
+				{
+					type: { type: String, enum: ['certificate', 'badge', 'other'], required: true },
+					code: { type: String },
+					title: { type: String },
+					description: { type: String },
+					awardedAt: { type: Date, default: Date.now },
+					issuedAt: { type: Date },
+					expiresAt: { type: Date, default: null },
+					fileUrl: { type: String, default: null },
+					credentialId: { type: String, default: null },
+					meta: { type: mongoose.Schema.Types.Mixed, default: {} },
+					awardedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+					revoked: { type: Boolean, default: false },
+					revokedAt: { type: Date, default: null },
+				},
+			],
+			default: [],
+		},
+	},
+	{ timestamps: true },
+)
+
+userSchema.index({ location: '2dsphere' }, { sparse: true })
+
+const hideSensitiveFields = (doc, ret) => {
+	delete ret.password
+	delete ret.refreshToken
+	delete ret.faceCredential
+	return ret
+}
+
+userSchema.set('toJSON', { transform: hideSensitiveFields })
+userSchema.set('toObject', { transform: hideSensitiveFields })
+
+// Automatically set isExtraLessonSupport based on role
+userSchema.pre('save', async function() {
+	if (this.role === 'supporteacher') {
+		this.isExtraLessonSupport = true
+	} else if (this.isModified('role') && this.role !== 'supporteacher') {
+		// Only set to false if role was changed away from supporteacher
+		// This preserves manual settings for other roles
+		this.isExtraLessonSupport = false
+	}
+})
+
+module.exports = mongoose.model('User', userSchema)

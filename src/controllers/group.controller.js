@@ -1,0 +1,1771 @@
+const mongoose = require('mongoose')
+
+const Course = require('../model/course.model')
+const Group = require('../model/group.model')
+const Student = require('../model/student.model')
+const User = require('../model/user.model')
+const { syncCourseGroupsCount } = require('../services/course-sync.service')
+const { resetStudentBalancesIfNeeded } = require('../services/student-balance-reset.service')
+
+const DAYS_OF_WEEK = [
+	'monday',
+	'tuesday',
+	'wednesday',
+	'thursday',
+	'friday',
+	'saturday',
+	'sunday',
+]
+const GROUP_STATUSES = ['planned', 'active', 'paused', 'completed', 'archived']
+const GROUP_TYPES = ['even', 'odd']
+const ATTENDANCE_STATUSES = ['present', 'absent', 'late', 'excused']
+const STUDENT_GROUP_STATUSES = ['active', 'paused', 'completed', 'left']
+const PRIVILEGED_ATTENDANCE_ROLES = new Set(['superadmin', 'admin', 'headteacher'])
+const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/
+const ATTENDANCE_TIMEZONE_OFFSET_HOURS = 5
+const ATTENDANCE_TIMEZONE_OFFSET_MINUTES = ATTENDANCE_TIMEZONE_OFFSET_HOURS * 60
+const COINS_PER_ACTIVE_STUDENT = 200
+const GROUP_TYPE_DAY_MAP = Object.freeze({
+	odd: ['monday', 'wednesday', 'friday'],
+	even: ['tuesday', 'thursday', 'saturday'],
+})
+const GROUP_TYPE_SCHEDULE_MESSAGE =
+	'schedule must have exactly 3 entries with valid startTime (HH:mm) and durationMinutes (30-300). Days are assigned automatically: odd → monday/wednesday/friday, even → tuesday/thursday/saturday'
+
+const parseDateValue = value => {
+	const date = new Date(value)
+	return Number.isNaN(date.getTime()) ? null : date
+}
+
+const parseJsonIfNeeded = input => {
+	if (typeof input !== 'string') {
+		return input
+	}
+
+	try {
+		return JSON.parse(input)
+	} catch (error) {
+		return undefined
+	}
+}
+
+const parseGroupType = input => {
+	const groupType = String(input || '')
+		.trim()
+		.toLowerCase()
+
+	if (!GROUP_TYPES.includes(groupType)) {
+		return null
+	}
+
+	return groupType
+}
+
+const matchesGroupTypeSchedule = ({ schedule, groupType }) => {
+	if (!Array.isArray(schedule) || schedule.length === 0) {
+		return false
+	}
+
+	if (!GROUP_TYPES.includes(groupType)) {
+		return false
+	}
+
+	const expectedDays = new Set(GROUP_TYPE_DAY_MAP[groupType] || [])
+	if (schedule.length !== expectedDays.size) {
+		return false
+	}
+
+	const actualDays = new Set()
+	for (const item of schedule) {
+		const day = String(item?.dayOfWeek || '')
+			.trim()
+			.toLowerCase()
+		if (!day || actualDays.has(day)) {
+			return false
+		}
+		actualDays.add(day)
+	}
+
+	if (actualDays.size !== expectedDays.size) {
+		return false
+	}
+
+	for (const day of expectedDays) {
+		if (!actualDays.has(day)) {
+			return false
+		}
+	}
+
+	return true
+}
+
+const detectGroupTypeFromSchedule = schedule => {
+	for (const groupType of GROUP_TYPES) {
+		if (matchesGroupTypeSchedule({ schedule, groupType })) {
+			return groupType
+		}
+	}
+
+	return null
+}
+
+const parseSchedule = (input, { groupType } = {}) => {
+	if (typeof input === 'undefined') {
+		return undefined
+	}
+
+	const parsed = parseJsonIfNeeded(input)
+	if (!Array.isArray(parsed) || parsed.length === 0) {
+		return null
+	}
+
+	const expectedDays = groupType ? GROUP_TYPE_DAY_MAP[groupType] : null
+	const expanded =
+		expectedDays && parsed.length === 1
+			? expectedDays.map(() => parsed[0])
+			: parsed
+
+	if (expectedDays && expanded.length !== expectedDays.length) {
+		return null
+	}
+
+	const normalized = []
+	for (let index = 0; index < expanded.length; index++) {
+		const item = expanded[index]
+		if (!item || typeof item !== 'object') {
+			return null
+		}
+
+		const dayOfWeek = expectedDays
+			? expectedDays[index]
+			: String(item.dayOfWeek || '').trim().toLowerCase()
+
+		const startTime = String(item.startTime || '').trim()
+		const durationMinutes = Number(item.durationMinutes)
+
+		if (!expectedDays && !DAYS_OF_WEEK.includes(dayOfWeek)) {
+			return null
+		}
+
+		if (!TIME_PATTERN.test(startTime)) {
+			return null
+		}
+
+		if (!Number.isFinite(durationMinutes) || durationMinutes < 30 || durationMinutes > 300) {
+			return null
+		}
+
+		normalized.push({ dayOfWeek, startTime, durationMinutes })
+	}
+
+	if (!expectedDays) {
+		const uniqueDays = new Set(normalized.map(item => item.dayOfWeek))
+		if (uniqueDays.size !== normalized.length) {
+			return null
+		}
+	}
+
+	return normalized
+}
+
+const containsExplicitDayOfWeek = input => {
+	const parsed = parseJsonIfNeeded(input)
+	if (!Array.isArray(parsed)) {
+		return false
+	}
+
+	return parsed.some(item => {
+		if (!item || typeof item !== 'object') {
+			return false
+		}
+
+		if (!Object.prototype.hasOwnProperty.call(item, 'dayOfWeek')) {
+			return false
+		}
+
+		return String(item.dayOfWeek || '').trim() !== ''
+	})
+}
+
+const parseObjectIdArray = input => {
+	if (typeof input === 'undefined') {
+		return undefined
+	}
+
+	let parsed = parseJsonIfNeeded(input)
+	if (typeof parsed === 'undefined') {
+		parsed = [String(input).trim()]
+	}
+
+	if (!Array.isArray(parsed)) {
+		return null
+	}
+
+	const normalized = []
+	for (const item of parsed) {
+		const value = String(item || '').trim()
+		if (!value) {
+			continue
+		}
+
+		if (!mongoose.isValidObjectId(value)) {
+			return null
+		}
+
+		normalized.push(value)
+	}
+
+	return normalized
+}
+
+const parseAttendanceRecords = input => {
+	if (typeof input === 'undefined') {
+		return undefined
+	}
+
+	const parsed = parseJsonIfNeeded(input)
+	if (!Array.isArray(parsed) || parsed.length === 0) {
+		return null
+	}
+
+	const normalized = []
+	for (const item of parsed) {
+		if (!item || typeof item !== 'object') {
+			return null
+		}
+
+		const student = String(item.student || '').trim()
+		const status = String(item.status || 'present')
+			.trim()
+			.toLowerCase()
+		const note = typeof item.note === 'undefined' ? undefined : String(item.note || '').trim()
+
+		if (!mongoose.isValidObjectId(student)) {
+			return null
+		}
+
+		if (!ATTENDANCE_STATUSES.includes(status)) {
+			return null
+		}
+
+		normalized.push({ student, status, note })
+	}
+
+	return normalized
+}
+
+const parseSingleAttendancePayload = body => {
+	const date = parseDateValue(body?.date)
+	if (!date) {
+		return { error: 'Invalid date value' }
+	}
+
+	const status = String(body?.status || '')
+		.trim()
+		.toLowerCase()
+	if (!ATTENDANCE_STATUSES.includes(status)) {
+		return { error: 'status must be one of present, absent, late, excused' }
+	}
+
+	const note =
+		typeof body?.note === 'undefined' ? undefined : String(body.note || '').trim()
+
+	return { date, status, note }
+}
+
+const parseGroupMemberStatus = input => {
+	const status = String(input || 'active')
+		.trim()
+		.toLowerCase()
+
+	if (!STUDENT_GROUP_STATUSES.includes(status)) {
+		return null
+	}
+
+	return status
+}
+
+const parseGroupMembershipPayload = body => {
+	const status = parseGroupMemberStatus(body.status)
+	if (!status) {
+		return { error: 'status must be one of active, paused, completed, left' }
+	}
+
+	let joinedAt
+	if (typeof body.joinedAt !== 'undefined' && body.joinedAt !== null && body.joinedAt !== '') {
+		joinedAt = parseDateValue(body.joinedAt)
+		if (!joinedAt) {
+			return { error: 'Invalid joinedAt value' }
+		}
+	}
+
+	const note = typeof body.note === 'undefined' ? undefined : String(body.note || '').trim()
+	return { status, joinedAt, note }
+}
+
+const toAttendanceLocalDate = value => {
+	const date = new Date(value)
+	if (Number.isNaN(date.getTime())) {
+		return null
+	}
+
+	const localMs = date.getTime() + ATTENDANCE_TIMEZONE_OFFSET_MINUTES * 60 * 1000
+	return new Date(localMs)
+}
+
+const toAttendanceDateKey = value => {
+	const localDate = toAttendanceLocalDate(value)
+	if (!localDate) {
+		return ''
+	}
+
+	const year = localDate.getUTCFullYear()
+	const month = String(localDate.getUTCMonth() + 1).padStart(2, '0')
+	const day = String(localDate.getUTCDate()).padStart(2, '0')
+	return `${year}-${month}-${day}`
+}
+
+const parseTimeToMinutes = value => {
+	const time = String(value || '').trim()
+	if (!TIME_PATTERN.test(time)) {
+		return null
+	}
+
+	const [hours, minutes] = time.split(':').map(Number)
+	return hours * 60 + minutes
+}
+
+const getDayOfWeekName = date => {
+	const localDate = toAttendanceLocalDate(date)
+	if (!localDate) {
+		return null
+	}
+
+	return DAYS_OF_WEEK[(localDate.getUTCDay() + 6) % DAYS_OF_WEEK.length]
+}
+
+const isNowWithinLessonWindow = (group, now = new Date()) => {
+	if (!group || !Array.isArray(group.schedule) || group.schedule.length === 0) {
+		return false
+	}
+
+	const dayOfWeek = getDayOfWeekName(now)
+	if (!dayOfWeek) {
+		return false
+	}
+
+	const localDate = toAttendanceLocalDate(now)
+	if (!localDate) {
+		return false
+	}
+	const nowMinutes = localDate.getUTCHours() * 60 + localDate.getUTCMinutes()
+
+	return group.schedule.some(scheduleItem => {
+		if (!scheduleItem || scheduleItem.dayOfWeek !== dayOfWeek) {
+			return false
+		}
+
+		const startMinutes = parseTimeToMinutes(scheduleItem.startTime)
+		const durationMinutes = Number(scheduleItem.durationMinutes)
+		if (startMinutes === null || !Number.isFinite(durationMinutes) || durationMinutes <= 0) {
+			return false
+		}
+
+		const endMinutes = startMinutes + durationMinutes
+		return nowMinutes >= startMinutes && nowMinutes < endMinutes
+	})
+}
+
+// Validate attendance window. Privileged roles bypass window checks.
+const validateAttendanceWindow = ({ group, date, user, now = new Date() }) => {
+	// privileged roles can bypass time restrictions entirely
+	if (user && PRIVILEGED_ATTENDANCE_ROLES.has(user.role)) return null
+
+	if (toAttendanceDateKey(date) !== toAttendanceDateKey(now)) {
+		return {
+			statusCode: 400,
+			message: 'Attendance date must be today',
+		}
+	}
+
+	if (!isNowWithinLessonWindow(group, now)) {
+		return {
+			statusCode: 403,
+			message: 'Attendance can only be updated during scheduled lesson time',
+		}
+	}
+
+	return null
+}
+
+
+// Validate modification permissions for attendance records.
+// - privileged roles bypass restrictions
+// - teachers/support teachers can only modify within 24h from lesson start
+// - teachers/support teachers can only modify a single time per record
+const validateAttendanceModificationPermissions = ({ user, group, existingRecord, date, now = new Date() }) => {
+	if (!user) return { statusCode: 403, message: 'Unauthorized' }
+	if (PRIVILEGED_ATTENDANCE_ROLES.has(user.role)) return null
+
+	const userId = String(user._id || '')
+	const isGroupTeacher = group.teacher?.toString() === userId
+	const isSupportTeacher = (group.supportTeachers || []).some(t => t.toString() === userId)
+	if (!isGroupTeacher && !isSupportTeacher) {
+		// Non-teacher roles are handled elsewhere (permissions)
+		return null
+	}
+
+	// If record exists and was already updated by a teacher, disallow further edits
+	if (existingRecord && existingRecord.updatedOnceByTeacher) {
+		return { statusCode: 403, message: 'Attendance already modified once', code: 'ATTENDANCE_PATCH_LIMIT' }
+	}
+
+	// Determine scheduled lesson start time for the attendance date
+	const dayOfWeek = getDayOfWeekName(date)
+	let scheduledStartUtcMs = null
+	if (dayOfWeek) {
+		const scheduleItem = (group.schedule || []).find(s => s && s.dayOfWeek === dayOfWeek)
+		if (scheduleItem && TIME_PATTERN.test(scheduleItem.startTime)) {
+			const [h, m] = scheduleItem.startTime.split(':').map(Number)
+			// Build local date at that start time
+			const localDate = toAttendanceLocalDate(date)
+			localDate.setUTCHours(h, m, 0, 0)
+			// Convert local->UTC by subtracting offset
+			scheduledStartUtcMs = localDate.getTime() - ATTENDANCE_TIMEZONE_OFFSET_MINUTES * 60 * 1000
+		}
+	}
+
+	// Default fallback: use provided date as scheduled start
+	if (scheduledStartUtcMs === null) scheduledStartUtcMs = date.getTime()
+
+	const maxMs = scheduledStartUtcMs + 24 * 60 * 60 * 1000
+	if (now.getTime() > maxMs) {
+		return { statusCode: 403, message: 'Teacher can only modify attendance within 24 hours from lesson time' }
+	}
+
+	return null
+}
+
+const canManageGroupAttendance = (user, group) => {
+	if (!user || !group) {
+		return false
+	}
+
+	if (PRIVILEGED_ATTENDANCE_ROLES.has(user.role)) {
+		return true
+	}
+
+	const userId = user._id?.toString()
+	if (!userId) {
+		return false
+	}
+
+	if (group.teacher?.toString() === userId) {
+		return true
+	}
+
+	return (group.supportTeachers || []).some(teacherId => teacherId.toString() === userId)
+}
+
+const CHARGED_STATUSES = new Set(['present', 'late'])
+
+const upsertGroupAttendanceRecord = ({ group, studentId, date, status, note, markedBy, modifierIsTeacher = false, modifierId = null }) => {
+	const dateKey = toAttendanceDateKey(date)
+	const recordIndex = group.attendance.findIndex(item => {
+		return item.student.toString() === studentId && toAttendanceDateKey(item.date) === dateKey
+	})
+
+	const previousStatus = recordIndex !== -1 ? group.attendance[recordIndex].status : null
+
+	const payload = {
+		student: studentId,
+		date,
+		status,
+		note,
+		markedBy,
+		markedAt: new Date(),
+	}
+
+	// If modifier is a teacher/support teacher, set patch metadata accordingly
+	if (modifierIsTeacher) {
+		payload.updatedOnceByTeacher = true
+		payload.teacherUpdatedAt = new Date()
+		payload.teacherUpdatedBy = modifierId || markedBy || null
+	}
+
+	if (recordIndex === -1) {
+		group.attendance.push(payload)
+	} else {
+		// preserve any existing teacher metadata if present and not overwritten
+		const existing = group.attendance[recordIndex]
+		payload.updatedOnceByTeacher = existing.updatedOnceByTeacher || payload.updatedOnceByTeacher || false
+		payload.teacherUpdatedAt = existing.teacherUpdatedAt || payload.teacherUpdatedAt || null
+		payload.teacherUpdatedBy = existing.teacherUpdatedBy || payload.teacherUpdatedBy || null
+		group.attendance[recordIndex] = payload
+	}
+
+	return { previousStatus }
+}
+
+const computeBalanceDelta = (previousStatus, newStatus, perLessonCost) => {
+	const costPerLesson = Number(perLessonCost || 0)
+	const wasCharged = previousStatus !== null && CHARGED_STATUSES.has(previousStatus)
+	const shouldCharge = CHARGED_STATUSES.has(newStatus)
+
+	if (shouldCharge && !wasCharged) return -costPerLesson
+	if (!shouldCharge && wasCharged) return costPerLesson
+	return 0
+}
+
+const runBalanceResetSafely = async () => {
+	try {
+		await resetStudentBalancesIfNeeded()
+	} catch (error) {
+		console.error('Student balance reset check failed:', error)
+	}
+}
+
+const getActiveStudentCountsByGroupIds = async groupIds => {
+	if (!Array.isArray(groupIds) || groupIds.length === 0) {
+		return new Map()
+	}
+
+	const ids = groupIds
+		.filter(Boolean)
+		.map(groupId => new mongoose.Types.ObjectId(groupId))
+
+	const stats = await Student.aggregate([
+		{
+			$unwind: '$groups',
+		},
+		{
+			$match: {
+				'groups.group': { $in: ids },
+				'groups.status': 'active',
+			},
+		},
+		{
+			$group: {
+				_id: '$groups.group',
+				studentsCount: { $sum: 1 },
+			},
+		},
+	])
+
+	const countsMap = new Map()
+	for (const item of stats) {
+		countsMap.set(item._id.toString(), item.studentsCount)
+	}
+
+	return countsMap
+}
+
+const countActiveStudentsForGroup = async (groupId, { excludeStudentId } = {}) => {
+	const query = {
+		groups: {
+			$elemMatch: {
+				group: groupId,
+				status: 'active',
+			},
+		},
+	}
+
+	if (excludeStudentId && mongoose.isValidObjectId(excludeStudentId)) {
+		query._id = { $ne: excludeStudentId }
+	}
+
+	return Student.countDocuments(query)
+}
+
+const findMissingUserIds = async userIds => {
+	if (!Array.isArray(userIds) || userIds.length === 0) {
+		return []
+	}
+
+	const normalizedIds = [...new Set(userIds.map(userId => String(userId).trim()))].filter(Boolean)
+	if (normalizedIds.length === 0) {
+		return []
+	}
+
+	const users = await User.find({ _id: { $in: normalizedIds } }).select('_id')
+	const existingIds = new Set(users.map(user => user._id.toString()))
+	return normalizedIds.filter(userId => !existingIds.has(userId))
+}
+
+const normalizeObjectIdArray = values => {
+	if (!Array.isArray(values)) {
+		return []
+	}
+
+	const seen = new Set()
+	const normalized = []
+	for (const value of values) {
+		const id = String(value || '').trim()
+		if (!id || !mongoose.isValidObjectId(id) || seen.has(id)) {
+			continue
+		}
+		seen.add(id)
+		normalized.push(new mongoose.Types.ObjectId(id))
+	}
+
+	return normalized
+}
+
+const resolveGroupCourseLink = async ({ courseIdInput, fallbackCourseName }) => {
+	const normalizedCourseId = String(courseIdInput || '').trim()
+	const normalizedCourseName = String(fallbackCourseName || '').trim()
+
+	if (!normalizedCourseId) {
+		return {
+			courseName: normalizedCourseName,
+			courseRef: null,
+			lessons: [],
+		}
+	}
+
+	if (!mongoose.isValidObjectId(normalizedCourseId)) {
+		return { error: 'Invalid courseId' }
+	}
+
+	const course = await Course.findById(normalizedCourseId).select('_id name methodology')
+	if (!course) {
+		return { statusCode: 404, error: 'Course not found' }
+	}
+
+	return {
+		courseName: course.name,
+		courseRef: course._id,
+		lessons: normalizeObjectIdArray(course.methodology),
+	}
+}
+
+const ensureStudentInGroupList = async ({ groupId, studentId }) => {
+	const group = await Group.findById(groupId).select('_id students')
+	if (!group) {
+		return
+	}
+
+	const studentIdString = String(studentId)
+	const students = normalizeObjectIdArray(group.students)
+	if (!students.some(id => id.toString() === studentIdString)) {
+		students.push(new mongoose.Types.ObjectId(studentIdString))
+	}
+
+	await Group.updateOne({ _id: groupId }, { $set: { students } })
+}
+
+const removeStudentFromGroupList = async ({ groupId, studentId }) => {
+	const group = await Group.findById(groupId).select('_id students')
+	if (!group) {
+		return
+	}
+
+	const studentIdString = String(studentId)
+	const students = normalizeObjectIdArray(group.students).filter(
+		id => id.toString() !== studentIdString,
+	)
+
+	await Group.updateOne({ _id: groupId }, { $set: { students } })
+}
+
+const attachGroupComputedFields = (groupDocument, activeStudentsCount = 0) => {
+	const group = groupDocument.toObject ? groupDocument.toObject() : { ...groupDocument }
+	group.studentsCount = activeStudentsCount
+	group.coinBalance = activeStudentsCount * COINS_PER_ACTIVE_STUDENT
+	return group
+}
+
+exports.createGroup = async (req, res) => {
+	try {
+		await runBalanceResetSafely()
+
+		const name = String(req.body.name || '').trim()
+		const course = String(req.body.course || '').trim()
+		const courseId = String(req.body.courseId || '').trim()
+		const rawGroupType = String(req.body.groupType || '').trim()
+		const groupType = parseGroupType(rawGroupType)
+		const teacher = String(req.body.teacher || '').trim()
+		const hasScheduleInput = typeof req.body.schedule !== 'undefined'
+		const schedule = parseSchedule(req.body.schedule, { groupType })
+		const startDate = parseDateValue(req.body.startDate)
+
+		if (!name || (!course && !courseId) || !rawGroupType || !teacher || !startDate || !hasScheduleInput) {
+			return res.status(400).json({
+				message:
+					'name, course or courseId, groupType, teacher, startDate and schedule are required',
+			})
+		}
+
+		if (!GROUP_TYPES.includes(groupType)) {
+			return res.status(400).json({ message: 'groupType must be even or odd' })
+		}
+
+		if (containsExplicitDayOfWeek(req.body.schedule)) {
+			return res.status(400).json({
+				message: 'Cannot specify both groupType and dayOfWeek',
+				code: 'AMBIGUOUS_SCHEDULE',
+			})
+		}
+
+		if (!schedule || !matchesGroupTypeSchedule({ schedule, groupType })) {
+			return res.status(400).json({ message: GROUP_TYPE_SCHEDULE_MESSAGE })
+		}
+
+		if (!mongoose.isValidObjectId(teacher)) {
+			return res.status(400).json({ message: 'Invalid teacher id' })
+		}
+
+		const resolvedCourseLink = await resolveGroupCourseLink({
+			courseIdInput: courseId,
+			fallbackCourseName: course,
+		})
+		if (resolvedCourseLink.error) {
+			return res.status(resolvedCourseLink.statusCode || 400).json({
+				message: resolvedCourseLink.error,
+			})
+		}
+
+		if (!resolvedCourseLink.courseName) {
+			return res.status(400).json({ message: 'course cannot be empty' })
+		}
+
+		const groupPayload = {
+			name,
+			course: resolvedCourseLink.courseName,
+			courseRef: resolvedCourseLink.courseRef,
+			groupType,
+			lessons: resolvedCourseLink.lessons,
+			teacher,
+			startDate,
+			schedule,
+		}
+
+		if (typeof req.body.level !== 'undefined') {
+			groupPayload.level = String(req.body.level || '').trim()
+		}
+
+		if (typeof req.body.status !== 'undefined') {
+			const status = String(req.body.status || '')
+				.trim()
+				.toLowerCase()
+			if (!GROUP_STATUSES.includes(status)) {
+				return res.status(400).json({ message: 'Invalid status value' })
+			}
+			groupPayload.status = status
+		}
+
+		if (typeof req.body.supportTeachers !== 'undefined') {
+			const supportTeachers = parseObjectIdArray(req.body.supportTeachers)
+			if (!supportTeachers) {
+				return res.status(400).json({
+					message: 'supportTeachers must be an array of valid user ObjectIds',
+				})
+			}
+			groupPayload.supportTeachers = supportTeachers
+		}
+
+		if (typeof req.body.maxStudents !== 'undefined') {
+			const maxStudents = Number(req.body.maxStudents)
+			if (!Number.isFinite(maxStudents) || maxStudents < 1 || maxStudents > 100) {
+				return res.status(400).json({ message: 'maxStudents must be between 1 and 100' })
+			}
+			groupPayload.maxStudents = maxStudents
+		}
+
+		if (typeof req.body.endDate !== 'undefined' && req.body.endDate !== null && req.body.endDate !== '') {
+			const endDate = parseDateValue(req.body.endDate)
+			if (!endDate) {
+				return res.status(400).json({ message: 'Invalid endDate value' })
+			}
+			groupPayload.endDate = endDate
+		}
+
+		if (typeof req.body.room !== 'undefined') {
+			groupPayload.room = String(req.body.room || '').trim()
+		}
+
+		if (typeof req.body.monthlyFee !== 'undefined') {
+			const monthlyFee = Number(req.body.monthlyFee)
+			if (!Number.isFinite(monthlyFee) || monthlyFee < 0) {
+				return res.status(400).json({ message: 'monthlyFee must be a non-negative number' })
+			}
+			groupPayload.monthlyFee = monthlyFee
+		}
+
+		if (typeof req.body.note !== 'undefined') {
+			groupPayload.note = String(req.body.note || '').trim()
+		}
+
+		if (
+			Array.isArray(groupPayload.supportTeachers) &&
+			groupPayload.supportTeachers.some(supportTeacherId => supportTeacherId === teacher)
+		) {
+			return res.status(400).json({
+				message: 'teacher cannot be listed in supportTeachers',
+			})
+		}
+
+		const missingUserIds = await findMissingUserIds([
+			groupPayload.teacher,
+			...(groupPayload.supportTeachers || []),
+		])
+		if (missingUserIds.length > 0) {
+			return res.status(400).json({
+				message: `One or more users were not found: ${missingUserIds.join(', ')}`,
+			})
+		}
+
+		const group = await Group.create(groupPayload)
+		if (group.courseRef) {
+			await syncCourseGroupsCount([group.courseRef.toString()]).catch(syncError => {
+				console.error('Create group course count sync failed:', syncError)
+			})
+		}
+
+		const populatedGroup = await Group.findById(group._id)
+			.populate('teacher', 'fullname role phone')
+			.populate('supportTeachers', 'fullname role phone')
+			.populate('students', 'fullname studentPhone parentPhone groupAttached')
+			.populate('courseRef', 'name durationMonths price groupsCount')
+			.populate('lessons', 'title order durationMinutes description course')
+
+
+		return res.status(201).json({
+			message: 'Group created successfully',
+			group: attachGroupComputedFields(populatedGroup, 0),
+			groupTypeApplied: true,
+			resolvedDays: GROUP_TYPE_DAY_MAP[groupType],
+		})
+	} catch (error) {
+		if (error.code === 11000) {
+			return res.status(409).json({ message: 'Group with same name and startDate already exists' })
+		}
+
+		if (error.name === 'ValidationError') {
+			const firstErrorMessage = Object.values(error.errors || {})[0]?.message
+			return res.status(400).json({ message: firstErrorMessage || 'Validation failed' })
+		}
+
+		console.error('Create group failed:', error)
+		return res.status(500).json({ message: 'Internal server error' })
+	}
+}
+
+exports.getGroups = async (req, res) => {
+	try {
+		await runBalanceResetSafely()
+
+		const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100)
+		const page = Math.max(Number(req.query.page) || 1, 1)
+		const skip = (page - 1) * limit
+		const search = String(req.query.search || '').trim()
+		const status = String(req.query.status || '')
+			.trim()
+			.toLowerCase()
+
+		const query = {}
+		if (search) {
+			query.$or = [
+				{ name: { $regex: search, $options: 'i' } },
+				{ course: { $regex: search, $options: 'i' } },
+				{ level: { $regex: search, $options: 'i' } },
+			]
+		}
+
+		if (status) {
+			if (!GROUP_STATUSES.includes(status)) {
+				return res.status(400).json({ message: 'Invalid status filter' })
+			}
+			query.status = status
+		}
+
+		const [groups, total] = await Promise.all([
+			Group.find(query)
+				.sort({ createdAt: -1 })
+				.skip(skip)
+				.limit(limit)
+				.populate('teacher', 'fullname role phone')
+				.populate('supportTeachers', 'fullname role phone')
+				.populate('courseRef', 'name durationMonths price groupsCount')
+				.populate('lessons', 'title order durationMinutes description course'),
+			Group.countDocuments(query),
+		])
+
+		const groupIds = groups.map(group => group._id.toString())
+		const countsMap = await getActiveStudentCountsByGroupIds(groupIds)
+
+		const normalizedGroups = groups.map(group => {
+			const studentsCount = countsMap.get(group._id.toString()) || 0
+			return attachGroupComputedFields(group, studentsCount)
+		})
+
+		return res.status(200).json({
+			page,
+			limit,
+			total,
+			data: normalizedGroups,
+		})
+	} catch (error) {
+		console.error('Get groups failed:', error)
+		return res.status(500).json({ message: 'Internal server error' })
+	}
+}
+
+exports.getGroupById = async (req, res) => {
+	try {
+		await runBalanceResetSafely()
+
+		const groupId = req.params.groupId
+		if (!mongoose.isValidObjectId(groupId)) {
+			return res.status(400).json({ message: 'Invalid group id' })
+		}
+
+		const group = await Group.findById(groupId)
+			.populate('teacher', 'fullname role phone')
+			.populate('supportTeachers', 'fullname role phone')
+			.populate('students', 'fullname studentPhone parentPhone groupAttached')
+			.populate('courseRef', 'name durationMonths price groupsCount')
+			.populate('lessons', 'title order durationMinutes description course')
+			.populate('attendance.student', 'fullname studentPhone')
+			.populate('attendance.markedBy', 'fullname role')
+		if (!group) {
+			return res.status(404).json({ message: 'Group not found' })
+		}
+
+		const countsMap = await getActiveStudentCountsByGroupIds([groupId])
+		const studentsCount = countsMap.get(groupId) || 0
+
+		return res.status(200).json({
+			group: attachGroupComputedFields(group, studentsCount),
+		})
+	} catch (error) {
+		console.error('Get group by id failed:', error)
+		return res.status(500).json({ message: 'Internal server error' })
+	}
+}
+
+exports.updateGroup = async (req, res) => {
+	try {
+		await runBalanceResetSafely()
+
+		const groupId = req.params.groupId
+		if (!mongoose.isValidObjectId(groupId)) {
+			return res.status(400).json({ message: 'Invalid group id' })
+		}
+
+		const group = await Group.findById(groupId)
+		if (!group) {
+			return res.status(404).json({ message: 'Group not found' })
+		}
+		const previousCourseRefId = group.courseRef ? group.courseRef.toString() : ''
+		const currentGroupType =
+			parseGroupType(group.groupType) || detectGroupTypeFromSchedule(group.schedule)
+		const nextGroupType =
+			typeof req.body.groupType === 'undefined'
+				? currentGroupType
+				: parseGroupType(req.body.groupType)
+
+		if (!canManageGroupAttendance(req.user, group)) {
+			return res.status(403).json({
+				message:
+					'Only assigned teacher/support teacher or admin/headteacher can manage attendance',
+			})
+		}
+
+		if (!nextGroupType) {
+			return res.status(400).json({
+				message:
+					'groupType must be even or odd and schedule must match even/odd day pattern',
+			})
+		}
+
+		if (typeof req.body.name !== 'undefined') {
+			const name = String(req.body.name || '').trim()
+			if (!name) {
+				return res.status(400).json({ message: 'name cannot be empty' })
+			}
+			group.name = name
+		}
+
+		const hasCourseIdInput = Object.prototype.hasOwnProperty.call(req.body, 'courseId')
+
+		if (hasCourseIdInput) {
+			const courseId = String(req.body.courseId || '').trim()
+			if (!mongoose.isValidObjectId(courseId)) {
+				return res.status(400).json({ message: 'Invalid courseId' })
+			}
+
+			const courseDocument = await Course.findById(courseId).select('_id name methodology')
+			if (!courseDocument) {
+				return res.status(404).json({ message: 'Course not found' })
+			}
+
+			group.courseRef = courseDocument._id
+			group.course = courseDocument.name
+			group.lessons = Array.isArray(courseDocument.methodology)
+				? [...courseDocument.methodology]
+				: [] // FIX [1]: Patch group course linking to always copy full methodology lessons array
+		} else if (typeof req.body.course !== 'undefined') {
+			const course = String(req.body.course || '').trim()
+			if (!course) {
+				return res.status(400).json({ message: 'course cannot be empty' })
+			}
+			group.course = course
+			group.courseRef = null
+			group.lessons = [] // FIX [1]: Patch group course unlinking to clear courseRef and lessons consistently
+		}
+
+		if (typeof req.body.level !== 'undefined') {
+			group.level = String(req.body.level || '').trim()
+		}
+
+		group.groupType = nextGroupType
+
+		if (typeof req.body.teacher !== 'undefined') {
+			const teacher = String(req.body.teacher || '').trim()
+			if (!mongoose.isValidObjectId(teacher)) {
+				return res.status(400).json({ message: 'Invalid teacher id' })
+			}
+			group.teacher = teacher
+		}
+
+		if (typeof req.body.supportTeachers !== 'undefined') {
+			const supportTeachers = parseObjectIdArray(req.body.supportTeachers)
+			if (!supportTeachers) {
+				return res.status(400).json({
+					message: 'supportTeachers must be an array of valid user ObjectIds',
+				})
+			}
+			group.supportTeachers = supportTeachers
+		}
+
+		if (typeof req.body.maxStudents !== 'undefined') {
+			const maxStudents = Number(req.body.maxStudents)
+			if (!Number.isFinite(maxStudents) || maxStudents < 1 || maxStudents > 100) {
+				return res.status(400).json({ message: 'maxStudents must be between 1 and 100' })
+			}
+			group.maxStudents = maxStudents
+		}
+
+		if (typeof req.body.status !== 'undefined') {
+			const status = String(req.body.status || '')
+				.trim()
+				.toLowerCase()
+			if (!GROUP_STATUSES.includes(status)) {
+				return res.status(400).json({ message: 'Invalid status value' })
+			}
+			group.status = status
+		}
+
+		if (typeof req.body.startDate !== 'undefined') {
+			const startDate = parseDateValue(req.body.startDate)
+			if (!startDate) {
+				return res.status(400).json({ message: 'Invalid startDate value' })
+			}
+			group.startDate = startDate
+		}
+
+		if (typeof req.body.endDate !== 'undefined') {
+			if (req.body.endDate === null || req.body.endDate === '') {
+				group.endDate = null
+			} else {
+				const endDate = parseDateValue(req.body.endDate)
+				if (!endDate) {
+					return res.status(400).json({ message: 'Invalid endDate value' })
+				}
+				group.endDate = endDate
+			}
+		}
+
+		if (typeof req.body.schedule !== 'undefined') {
+			if (containsExplicitDayOfWeek(req.body.schedule)) {
+				return res.status(400).json({
+					message: 'Cannot specify both groupType and dayOfWeek',
+					code: 'AMBIGUOUS_SCHEDULE',
+				})
+			}
+
+			const schedule = parseSchedule(req.body.schedule, { groupType: nextGroupType })
+			if (!schedule) {
+				return res.status(400).json({ message: GROUP_TYPE_SCHEDULE_MESSAGE })
+			}
+			group.schedule = schedule
+		} else if (!matchesGroupTypeSchedule({ schedule: group.schedule, groupType: nextGroupType })) {
+			const expectedDays = GROUP_TYPE_DAY_MAP[nextGroupType]
+			if (!expectedDays || group.schedule.length !== expectedDays.length) {
+				return res.status(400).json({ message: GROUP_TYPE_SCHEDULE_MESSAGE })
+			}
+			group.schedule = group.schedule.map((item, index) => ({
+				dayOfWeek: expectedDays[index],
+				startTime: item.startTime,
+				durationMinutes: item.durationMinutes,
+			}))
+		}
+
+		if (typeof req.body.room !== 'undefined') {
+			group.room = String(req.body.room || '').trim()
+		}
+
+		if (typeof req.body.monthlyFee !== 'undefined') {
+			const monthlyFee = Number(req.body.monthlyFee)
+			if (!Number.isFinite(monthlyFee) || monthlyFee < 0) {
+				return res.status(400).json({ message: 'monthlyFee must be a non-negative number' })
+			}
+			group.monthlyFee = monthlyFee
+		}
+
+		if (typeof req.body.note !== 'undefined') {
+			group.note = String(req.body.note || '').trim()
+		}
+
+		if (group.supportTeachers.some(supportTeacherId => supportTeacherId.toString() === group.teacher.toString())) {
+			return res.status(400).json({
+				message: 'teacher cannot be listed in supportTeachers',
+			})
+		}
+
+		const missingUserIds = await findMissingUserIds([group.teacher, ...group.supportTeachers])
+		if (missingUserIds.length > 0) {
+			return res.status(400).json({
+				message: `One or more users were not found: ${missingUserIds.join(', ')}`,
+			})
+		}
+
+		await group.save()
+
+		const nextCourseRefId = group.courseRef ? group.courseRef.toString() : ''
+		const courseIdsToSync = [...new Set([previousCourseRefId, nextCourseRefId])].filter(Boolean)
+		if (courseIdsToSync.length > 0) {
+			await syncCourseGroupsCount(courseIdsToSync).catch(syncError => {
+				console.error('Update group course count sync failed:', syncError)
+			})
+		}
+
+		const updatedGroup = await Group.findById(groupId)
+			.populate('teacher', 'fullname role phone')
+			.populate('supportTeachers', 'fullname role phone')
+			.populate('students', 'fullname studentPhone parentPhone groupAttached')
+			.populate('courseRef', 'name durationMonths price groupsCount')
+			.populate('lessons', 'title order durationMinutes description course')
+			.populate('attendance.student', 'fullname studentPhone')
+			.populate('attendance.markedBy', 'fullname role')
+
+		const countsMap = await getActiveStudentCountsByGroupIds([groupId])
+		const studentsCount = countsMap.get(groupId) || 0
+
+		return res.status(200).json({
+			message: 'Group updated successfully',
+			group: attachGroupComputedFields(updatedGroup, studentsCount),
+			groupTypeApplied: true,
+			resolvedDays: GROUP_TYPE_DAY_MAP[nextGroupType],
+		})
+	} catch (error) {
+		if (error.code === 11000) {
+			return res.status(409).json({ message: 'Group with same name and startDate already exists' })
+		}
+
+		if (error.name === 'ValidationError') {
+			const firstErrorMessage = Object.values(error.errors || {})[0]?.message
+			return res.status(400).json({ message: firstErrorMessage || 'Validation failed' })
+		}
+
+		console.error('Update group failed:', error)
+		return res.status(500).json({ message: 'Internal server error' })
+	}
+}
+
+exports.getGroupStudents = async (req, res) => {
+	try {
+		await runBalanceResetSafely()
+
+		const groupId = req.params.groupId
+		if (!mongoose.isValidObjectId(groupId)) {
+			return res.status(400).json({ message: 'Invalid group id' })
+		}
+
+		const groupExists = await Group.exists({ _id: groupId })
+		if (!groupExists) {
+			return res.status(404).json({ message: 'Group not found' })
+		}
+
+		const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100)
+		const page = Math.max(Number(req.query.page) || 1, 1)
+		const skip = (page - 1) * limit
+		const search = String(req.query.search || '').trim()
+		const membershipStatus = String(req.query.membershipStatus || '')
+			.trim()
+			.toLowerCase()
+
+		const groupMembershipFilter = { group: new mongoose.Types.ObjectId(groupId) }
+		if (membershipStatus) {
+			if (!STUDENT_GROUP_STATUSES.includes(membershipStatus)) {
+				return res.status(400).json({
+					message: 'membershipStatus must be one of active, paused, completed, left',
+				})
+			}
+			groupMembershipFilter.status = membershipStatus
+		}
+
+		const query = {
+			groups: {
+				$elemMatch: groupMembershipFilter,
+			},
+		}
+
+		if (search) {
+			query.$or = [
+				{ fullname: { $regex: search, $options: 'i' } },
+				{ studentPhone: { $regex: search, $options: 'i' } },
+				{ parentPhone: { $regex: search, $options: 'i' } },
+			]
+		}
+
+		const [students, total] = await Promise.all([
+			Student.find(query)
+				.sort({ createdAt: -1 })
+				.skip(skip)
+				.limit(limit)
+				.populate('groups.group', 'name course courseRef lessons groupType level status'),
+			Student.countDocuments(query),
+		])
+
+		const normalizedStudents = students.map(student => {
+			const studentObject = student.toObject()
+			const membership = studentObject.groups.find(groupItem => {
+				const linkedGroup =
+					groupItem.group && typeof groupItem.group === 'object'
+						? groupItem.group._id
+						: groupItem.group
+				return linkedGroup && linkedGroup.toString() === groupId
+			})
+
+			return {
+				...studentObject,
+				groupMembership: membership || null,
+			}
+		})
+
+		return res.status(200).json({
+			page,
+			limit,
+			total,
+			data: normalizedStudents,
+		})
+	} catch (error) {
+		console.error('Get group students failed:', error)
+		return res.status(500).json({ message: 'Internal server error' })
+	}
+}
+
+exports.attachStudentToGroup = async (req, res) => {
+	try {
+		await runBalanceResetSafely()
+
+		const groupId = req.params.groupId
+		const studentId = req.params.studentId
+
+		if (!mongoose.isValidObjectId(groupId)) {
+			return res.status(400).json({ message: 'Invalid group id' })
+		}
+
+		if (!mongoose.isValidObjectId(studentId)) {
+			return res.status(400).json({ message: 'Invalid student id' })
+		}
+
+		const [group, student] = await Promise.all([
+			Group.findById(groupId).select('_id status maxStudents'),
+			Student.findById(studentId),
+		])
+
+		if (!group) {
+			return res.status(404).json({ message: 'Group not found' })
+		}
+
+		if (!student) {
+			return res.status(404).json({ message: 'Student not found' })
+		}
+
+		const membershipIndex = student.groups.findIndex(
+			groupItem => groupItem.group.toString() === groupId,
+		)
+		const existingMembership = membershipIndex === -1 ? null : student.groups[membershipIndex]
+
+		const membershipPayload = parseGroupMembershipPayload({
+			...(req.body || {}),
+			status:
+				typeof req.body?.status === 'undefined'
+					? existingMembership?.status || 'active'
+					: req.body.status,
+		})
+		if (membershipPayload.error) {
+			return res.status(400).json({ message: membershipPayload.error })
+		}
+
+		if (membershipPayload.status === 'active') {
+			if (['completed', 'archived'].includes(group.status)) {
+				return res.status(400).json({
+					message: 'Cannot add active students to completed or archived groups',
+				})
+			}
+
+			const isActivatingNewSeat =
+				!existingMembership || existingMembership.status !== 'active'
+
+			if (isActivatingNewSeat) {
+				const activeStudentsCount = await countActiveStudentsForGroup(groupId, {
+					excludeStudentId: studentId,
+				})
+				if (activeStudentsCount >= group.maxStudents) {
+					return res.status(409).json({
+						message: 'Group has reached maxStudents limit',
+					})
+				}
+			}
+		}
+
+		const nextMembership = {
+			group: groupId,
+			status: membershipPayload.status,
+			joinedAt: membershipPayload.joinedAt || existingMembership?.joinedAt || new Date(),
+		}
+
+		if (typeof membershipPayload.note !== 'undefined') {
+			nextMembership.note = membershipPayload.note
+		} else if (existingMembership && typeof existingMembership.note !== 'undefined') {
+			nextMembership.note = existingMembership.note
+		}
+
+		if (membershipIndex === -1) {
+			student.groups.push(nextMembership)
+		} else {
+			student.groups[membershipIndex] = nextMembership
+		}
+
+		await student.save()
+		await ensureStudentInGroupList({ groupId, studentId }).catch(syncError => {
+			console.error('Attach student group list sync failed:', syncError)
+		})
+
+		const [updatedStudent, countsMap] = await Promise.all([
+			Student.findById(studentId).populate(
+				'groups.group',
+				'name course courseRef lessons groupType level status',
+			),
+			getActiveStudentCountsByGroupIds([groupId]),
+		])
+
+		const studentsCount = countsMap.get(groupId) || 0
+
+		return res.status(membershipIndex === -1 ? 201 : 200).json({
+			message:
+				membershipIndex === -1
+					? 'Student attached to group successfully'
+					: 'Student group membership updated successfully',
+			group: {
+				_id: group._id,
+				studentsCount,
+				coinBalance: studentsCount * COINS_PER_ACTIVE_STUDENT,
+			},
+			student: updatedStudent,
+		})
+	} catch (error) {
+		if (error.name === 'ValidationError') {
+			const firstErrorMessage = Object.values(error.errors || {})[0]?.message
+			return res.status(400).json({ message: firstErrorMessage || 'Validation failed' })
+		}
+
+		console.error('Attach student to group failed:', error)
+		return res.status(500).json({ message: 'Internal server error' })
+	}
+}
+
+exports.detachStudentFromGroup = async (req, res) => {
+	try {
+		await runBalanceResetSafely()
+
+		const groupId = req.params.groupId
+		const studentId = req.params.studentId
+
+		if (!mongoose.isValidObjectId(groupId)) {
+			return res.status(400).json({ message: 'Invalid group id' })
+		}
+
+		if (!mongoose.isValidObjectId(studentId)) {
+			return res.status(400).json({ message: 'Invalid student id' })
+		}
+
+		const [group, student] = await Promise.all([
+			Group.findById(groupId).select('_id'),
+			Student.findById(studentId),
+		])
+
+		if (!group) {
+			return res.status(404).json({ message: 'Group not found' })
+		}
+
+		if (!student) {
+			return res.status(404).json({ message: 'Student not found' })
+		}
+
+		const previousGroupsCount = student.groups.length
+		student.groups = student.groups.filter(groupItem => groupItem.group.toString() !== groupId)
+
+		if (student.groups.length === previousGroupsCount) {
+			return res.status(404).json({ message: 'Student is not attached to this group' })
+		}
+
+		await student.save()
+		await removeStudentFromGroupList({ groupId, studentId }).catch(syncError => {
+			console.error('Detach student group list sync failed:', syncError)
+		})
+
+		const [updatedStudent, countsMap] = await Promise.all([
+			Student.findById(studentId).populate(
+				'groups.group',
+				'name course courseRef lessons groupType level status',
+			),
+			getActiveStudentCountsByGroupIds([groupId]),
+		])
+
+		const studentsCount = countsMap.get(groupId) || 0
+
+		return res.status(200).json({
+			message: 'Student detached from group successfully',
+			group: {
+				_id: group._id,
+				studentsCount,
+				coinBalance: studentsCount * COINS_PER_ACTIVE_STUDENT,
+			},
+			student: updatedStudent,
+		})
+	} catch (error) {
+		console.error('Detach student from group failed:', error)
+		return res.status(500).json({ message: 'Internal server error' })
+	}
+}
+
+exports.deleteGroup = async (req, res) => {
+	try {
+		await runBalanceResetSafely()
+
+		const groupId = req.params.groupId
+		if (!mongoose.isValidObjectId(groupId)) {
+			return res.status(400).json({ message: 'Invalid group id' })
+		}
+
+		const deletedGroup = await Group.findByIdAndDelete(groupId)
+		if (!deletedGroup) {
+			return res.status(404).json({ message: 'Group not found' })
+		}
+
+		if (deletedGroup.courseRef) {
+			await syncCourseGroupsCount([deletedGroup.courseRef.toString()]).catch(syncError => {
+				console.error('Delete group course count sync failed:', syncError)
+			})
+		}
+
+		const affectedStudents = await Student.find({ 'groups.group': groupId }).select('_id')
+		if (affectedStudents.length > 0) {
+			const affectedStudentIds = affectedStudents.map(student => student._id)
+
+			await Student.updateMany(
+				{ _id: { $in: affectedStudentIds } },
+				{
+					$pull: { groups: { group: groupId } },
+				},
+			)
+
+			const reloadedStudents = await Student.find({ _id: { $in: affectedStudentIds } }).select(
+				'_id groups',
+			)
+			const updates = reloadedStudents.map(student => {
+				const groupAttached = (student.groups || []).some(
+					groupItem => groupItem.status === 'active',
+				)
+
+				return {
+					updateOne: {
+						filter: { _id: student._id },
+						update: { $set: { groupAttached } },
+					},
+				}
+			})
+
+			if (updates.length > 0) {
+				await Student.bulkWrite(updates)
+			}
+		}
+
+		return res.status(200).json({ message: 'Group deleted successfully' })
+	} catch (error) {
+		console.error('Delete group failed:', error)
+		return res.status(500).json({ message: 'Internal server error' })
+	}
+}
+
+exports.upsertGroupAttendance = async (req, res) => {
+	try {
+		await runBalanceResetSafely()
+
+		const groupId = req.params.groupId
+		if (!mongoose.isValidObjectId(groupId)) {
+			return res.status(400).json({ message: 'Invalid group id' })
+		}
+
+		const date = parseDateValue(req.body.date)
+		const records = parseAttendanceRecords(req.body.records)
+
+		if (!date || !records) {
+			return res.status(400).json({
+				message: 'date and records are required, records must be a non-empty array',
+			})
+		}
+
+		const studentIds = records.map(item => item.student)
+		if (new Set(studentIds).size !== studentIds.length) {
+			return res.status(400).json({
+				message: 'records cannot contain duplicate students for the same request',
+			})
+		}
+
+		const group = await Group.findById(groupId)
+		if (!group) {
+			return res.status(404).json({ message: 'Group not found' })
+		}
+
+		if (!canManageGroupAttendance(req.user, group)) {
+			return res.status(403).json({
+				message:
+					'Only assigned teacher/support teacher or admin/headteacher can manage attendance',
+			})
+		}
+
+		const attendanceWindowError = validateAttendanceWindow({
+			group,
+			date,
+			user: req.user,
+		})
+		if (attendanceWindowError) {
+			return res.status(attendanceWindowError.statusCode).json({
+				message: attendanceWindowError.message,
+			})
+		}
+
+		// load full student documents to allow payable calculations per student
+		const activeMembers = await Student.find({
+			_id: { $in: studentIds },
+			groups: {
+				$elemMatch: {
+					group: groupId,
+					status: 'active',
+				},
+			},
+		})
+
+		if (activeMembers.length !== studentIds.length) {
+			return res.status(400).json({
+				message: 'All attendance students must be active members of the group',
+			})
+		}
+
+		const markedBy = req.user?._id
+		const balanceDeltas = []
+
+		// Map students for quick lookup
+		const studentsMap = new Map(activeMembers.map(s => [s._id.toString(), s]))
+
+		for (const record of records) {
+			const studentDoc = studentsMap.get(String(record.student))
+			if (!studentDoc) {
+				return res.status(400).json({ message: 'All attendance students must be active members of the group' })
+			}
+
+			// validate teacher/manager patch permissions per record
+			const existingRecord = group.attendance.find(item => item.student.toString() === record.student && toAttendanceDateKey(item.date) === toAttendanceDateKey(date))
+			const modPermError = validateAttendanceModificationPermissions({ user: req.user, group, existingRecord, date, now: new Date() })
+			if (modPermError) {
+				// if the error contains a machine code, include it
+				return res.status(modPermError.statusCode).json({ message: modPermError.message, code: modPermError.code })
+			}
+
+			const { previousStatus } = upsertGroupAttendanceRecord({
+				group,
+				studentId: record.student,
+				date,
+				status: record.status,
+				note: record.note,
+				markedBy,
+				modifierIsTeacher: (req.user.role === 'teacher' || (group.teacher && group.teacher.toString() === String(req.user._id)) || (group.supportTeachers || []).some(t => t.toString() === String(req.user._id))),
+				modifierId: req.user?._id,
+			})
+
+			const payable = require('../services/finance.service').computeStudentPayableAmount(studentDoc)
+			const perLesson = payable / 12
+			const delta = computeBalanceDelta(previousStatus, record.status, perLesson)
+			if (delta !== 0) {
+				balanceDeltas.push({ studentId: record.student, delta })
+			}
+		}
+
+		await group.save()
+
+		if (balanceDeltas.length > 0) {
+			await Promise.all(
+				balanceDeltas.map(({ studentId, delta }) =>
+					Student.findByIdAndUpdate(studentId, { $inc: { balance: delta } }),
+				),
+			)
+		}
+
+		const updatedGroup = await Group.findById(groupId)
+			.populate('teacher', 'fullname role phone')
+			.populate('supportTeachers', 'fullname role phone')
+			.populate('students', 'fullname studentPhone parentPhone groupAttached')
+			.populate('courseRef', 'name durationMonths price groupsCount')
+			.populate('lessons', 'title order durationMinutes description course')
+			.populate('attendance.student', 'fullname studentPhone')
+			.populate('attendance.markedBy', 'fullname role')
+
+		const countsMap = await getActiveStudentCountsByGroupIds([groupId])
+		const studentsCount = countsMap.get(groupId) || 0
+
+		return res.status(200).json({
+			message: 'Attendance updated successfully',
+			group: attachGroupComputedFields(updatedGroup, studentsCount),
+		})
+	} catch (error) {
+		if (error.name === 'ValidationError') {
+			const firstErrorMessage = Object.values(error.errors || {})[0]?.message
+			return res.status(400).json({ message: firstErrorMessage || 'Validation failed' })
+		}
+
+		console.error('Upsert group attendance failed:', error)
+		return res.status(500).json({ message: 'Internal server error' })
+	}
+}
+
+exports.markGroupAttendanceStudent = async (req, res) => {
+	try {
+		await runBalanceResetSafely()
+
+		const groupId = req.params.groupId
+		const studentId = req.params.studentId
+
+		if (!mongoose.isValidObjectId(groupId)) {
+			return res.status(400).json({ message: 'Invalid group id' })
+		}
+
+		if (!mongoose.isValidObjectId(studentId)) {
+			return res.status(400).json({ message: 'Invalid student id' })
+		}
+
+		const parsedPayload = parseSingleAttendancePayload(req.body || {})
+		if (parsedPayload.error) {
+			return res.status(400).json({ message: parsedPayload.error })
+		}
+
+		const group = await Group.findById(groupId)
+		if (!group) {
+			return res.status(404).json({ message: 'Group not found' })
+		}
+
+		if (!canManageGroupAttendance(req.user, group)) {
+			return res.status(403).json({
+				message:
+					'Only assigned teacher/support teacher or admin/headteacher can manage attendance',
+			})
+		}
+
+		const attendanceWindowError = validateAttendanceWindow({
+			group,
+			date: parsedPayload.date,
+			user: req.user,
+		})
+		if (attendanceWindowError) {
+			return res.status(attendanceWindowError.statusCode).json({
+				message: attendanceWindowError.message,
+			})
+		}
+
+		const isActiveMember = await Student.exists({
+			_id: studentId,
+			groups: {
+				$elemMatch: {
+					group: groupId,
+					status: 'active',
+				},
+			},
+		})
+
+		if (!isActiveMember) {
+			return res.status(400).json({
+				message: 'Student must be an active member of the group',
+			})
+		}
+
+		// load student to compute payable per-lesson
+		const studentDoc = await Student.findById(studentId)
+		if (!studentDoc) {
+			return res.status(404).json({ message: 'Student not found' })
+		}
+
+		const existingRecord = group.attendance.find(item => item.student.toString() === studentId && toAttendanceDateKey(item.date) === toAttendanceDateKey(parsedPayload.date))
+		const modPermError = validateAttendanceModificationPermissions({ user: req.user, group, existingRecord, date: parsedPayload.date, now: new Date() })
+		if (modPermError) {
+			return res.status(modPermError.statusCode).json({ message: modPermError.message, code: modPermError.code })
+		}
+
+		const { previousStatus } = upsertGroupAttendanceRecord({
+			group,
+			studentId,
+			date: parsedPayload.date,
+			status: parsedPayload.status,
+			note: parsedPayload.note,
+			markedBy: req.user?._id,
+			modifierIsTeacher: (req.user.role === 'teacher' || (group.teacher && group.teacher.toString() === String(req.user._id)) || (group.supportTeachers || []).some(t => t.toString() === String(req.user._id))),
+			modifierId: req.user?._id,
+		})
+
+		await group.save()
+
+		const payable = require('../services/finance.service').computeStudentPayableAmount(studentDoc)
+		const perLesson = payable / 12
+		const balanceDelta = computeBalanceDelta(previousStatus, parsedPayload.status, perLesson)
+		if (balanceDelta !== 0) {
+			await Student.findByIdAndUpdate(studentId, { $inc: { balance: balanceDelta } })
+		}
+
+		const updatedGroup = await Group.findById(groupId)
+			.populate('teacher', 'fullname role phone')
+			.populate('supportTeachers', 'fullname role phone')
+			.populate('students', 'fullname studentPhone parentPhone groupAttached')
+			.populate('courseRef', 'name durationMonths price groupsCount')
+			.populate('lessons', 'title order durationMinutes description course')
+			.populate('attendance.student', 'fullname studentPhone')
+			.populate('attendance.markedBy', 'fullname role')
+
+		const countsMap = await getActiveStudentCountsByGroupIds([groupId])
+		const studentsCount = countsMap.get(groupId) || 0
+
+		const attendanceEntry = (updatedGroup.attendance || []).find(item => {
+			return (
+				item.student?._id?.toString?.() === studentId &&
+				toAttendanceDateKey(item.date) === toAttendanceDateKey(parsedPayload.date)
+			)
+		})
+
+		return res.status(200).json({
+			message: 'Attendance updated successfully',
+			attendance: attendanceEntry || null,
+			group: attachGroupComputedFields(updatedGroup, studentsCount),
+		})
+	} catch (error) {
+		if (error.name === 'ValidationError') {
+			const firstErrorMessage = Object.values(error.errors || {})[0]?.message
+			return res.status(400).json({ message: firstErrorMessage || 'Validation failed' })
+		}
+
+		console.error('Mark group attendance for student failed:', error)
+		return res.status(500).json({ message: 'Internal server error' })
+	}
+}
