@@ -31,6 +31,7 @@ const Group = require('../src/model/group.model')
 const Course = require('../src/model/course.model')
 const Lesson = require('../src/model/lesson.model')
 const ExtraLesson = require('../src/model/extra-lesson.model').ExtraLesson
+const { WebRtcRoom } = require('../src/model/webrtc-room.model')
 const Role = require('../src/models/Role.model')
 const FaceCredential = require('../src/models/FaceCredential.model')
 
@@ -683,8 +684,10 @@ const runTests = async () => {
 		await test('extra-lesson completion charges paid students and credits teacher', async () => {
 			const lessonId = '507f1f77bcf86cd799439141'
 			const teacherId = '507f1f77bcf86cd799439142'
-			const studentFree = { _id: '507f1f77bcf86cd799439143', monthlyExtraLessonsUsed: 2, extraLessonQuotaMonth: '2026-05' }
-			const studentPaid = { _id: '507f1f77bcf86cd799439144', monthlyExtraLessonsUsed: 3, extraLessonQuotaMonth: '2026-05' }
+			const localNow = new Date(Date.now() + 5 * 60 * 60 * 1000)
+			const currentMonth = `${localNow.getUTCFullYear()}-${String(localNow.getUTCMonth() + 1).padStart(2, '0')}`
+			const studentFree = { _id: '507f1f77bcf86cd799439143', monthlyExtraLessonsUsed: 2, extraLessonQuotaMonth: currentMonth }
+			const studentPaid = { _id: '507f1f77bcf86cd799439144', monthlyExtraLessonsUsed: 3, extraLessonQuotaMonth: currentMonth }
 
 			let processed = []
 			await withPatchedMethods(
@@ -721,6 +724,56 @@ const runTests = async () => {
 					// one student should be charged
 					assert.strictEqual(processed.length, 1)
 					assert.strictEqual(processed[0].amount, 15000)
+				},
+			)
+		})
+
+		await test('WebRTC waiting room keeps non-host participants pending', async () => {
+			const hostId = '507f1f77bcf86cd799439151'
+			const studentId = '507f1f77bcf86cd799439152'
+			const room = {
+				_id: '507f1f77bcf86cd799439153',
+				roomId: 'room_meet_style',
+				hostUserId: hostId,
+				hostUserType: 'employee',
+				hostParticipantId: `employee-${hostId}`,
+				title: 'Meet style lesson',
+				waitingRoomEnabled: true,
+				state: 'WAITING_ROOM',
+				participants: [
+					{
+						participantId: `employee-${hostId}`,
+						userId: hostId,
+						userType: 'employee',
+						displayName: 'Teacher',
+						role: 'teacher',
+						admitted: true,
+						admissionStatus: 'admitted',
+						joinedAt: new Date(),
+					},
+				],
+				save: async () => {},
+				toObject() {
+					return this
+				},
+			}
+
+			await withPatchedMethods(
+				[[WebRtcRoom, 'findOne', async () => room]],
+				async () => {
+					const res = await callHandler(require('../src/controllers/webrtc.controller').joinRoom, {
+						params: { roomId: room.roomId },
+						user: { id: studentId, userType: 'student' },
+						student: { fullname: 'Student' },
+						body: { participantId: `student-${studentId}` },
+					})
+
+					assert.strictEqual(res.statusCode, 200)
+					assert.strictEqual(res.body.admitted, false)
+					assert.strictEqual(res.body.admissionStatus, 'waiting')
+					assert.strictEqual(room.state, 'WAITING_ROOM')
+					assert.strictEqual(room.participants[1].admissionStatus, 'waiting')
+					assert.strictEqual(room.participants[1].joinedAt, null)
 				},
 			)
 		})

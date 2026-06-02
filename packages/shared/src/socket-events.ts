@@ -15,7 +15,7 @@ export type ParticipantSummary = {
   readonly userId: string;
   readonly displayName: string;
   readonly role: Role;
-  readonly joinedAt: string;
+  readonly joinedAt: string | null;
   readonly media: ParticipantMediaState;
   readonly networkQuality: NetworkQualityScore;
 };
@@ -147,12 +147,15 @@ export type ServerToClientSocketEvent =
   | BaseSocketEvent<"consumerCreated", { readonly consumerId: string; readonly producerId: string; readonly kind: "audio" | "video"; readonly rtpParameters: RtpParametersDto }>
   | BaseSocketEvent<"activeSpeaker", { readonly participantId: string; readonly volume: number }>
   | BaseSocketEvent<"participantJoined", ParticipantSummary>
+  | BaseSocketEvent<"roomParticipants", { readonly participants: readonly ParticipantSummary[] }>
   | BaseSocketEvent<"participantLeft", { readonly participantId: string; readonly leftAt: string }>
   | BaseSocketEvent<"participantUpdated", ParticipantSummary>
   | BaseSocketEvent<"messageCreated", ChatMessageDto>
   | BaseSocketEvent<"roomStateChanged", { readonly previousState: RoomState; readonly nextState: RoomState; readonly changedBy: string }>
   | BaseSocketEvent<"recordingStateChanged", { readonly active: boolean; readonly recordingId?: string }>
   | BaseSocketEvent<"waitingRoomUpdated", { readonly participants: readonly ParticipantSummary[] }>
+  | BaseSocketEvent<"admittedFromWaiting", { readonly participantId: string }>
+  | BaseSocketEvent<"deniedFromWaiting", { readonly participantId: string; readonly reason: string }>
   | BaseSocketEvent<"permissionDenied", { readonly eventType: ClientToServerSocketEvent["type"]; readonly reason: string }>
   | BaseSocketEvent<"error", { readonly code: string; readonly message: string }>;
 

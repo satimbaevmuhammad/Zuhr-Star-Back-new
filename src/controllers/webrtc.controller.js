@@ -50,6 +50,14 @@ const ensureRoomAccess = (room, identity) => {
 	)
 }
 
+const canHostRoom = (room, identity) => {
+	if (String(room.hostUserId) === String(identity.userId)) {
+		return true
+	}
+
+	return ['admin', 'superadmin'].includes(identity.role)
+}
+
 const createRoom = async (req, res) => {
 	try {
 		const identity = getIdentity(req)
@@ -103,6 +111,7 @@ const createRoom = async (req, res) => {
 					displayName: identity.displayName,
 					role: identity.role,
 					admitted: true,
+					admissionStatus: 'admitted',
 					joinedAt: now,
 				},
 			],
@@ -203,11 +212,17 @@ const joinRoom = async (req, res) => {
 		)
 		const displayName = String(req.body.displayName || identity.displayName).trim() || identity.displayName
 		const existing = room.participants.find(participant => participant.participantId === participantId)
+		const admitted = !room.waitingRoomEnabled || canHostRoom(room, identity)
+		const admissionStatus = admitted ? 'admitted' : 'waiting'
 
 		if (existing) {
 			existing.leftAt = null
 			existing.displayName = displayName
-			existing.admitted = true
+			existing.admitted = admitted
+			existing.admissionStatus = admissionStatus
+			if (admitted) {
+				existing.joinedAt = existing.joinedAt || new Date()
+			}
 		} else {
 			room.participants.push({
 				participantId,
@@ -215,12 +230,13 @@ const joinRoom = async (req, res) => {
 				userType: identity.userType,
 				displayName,
 				role: identity.role,
-				admitted: true,
-				joinedAt: new Date(),
+				admitted,
+				admissionStatus,
+				joinedAt: admitted ? new Date() : null,
 			})
 		}
 
-		if (room.state === 'IDLE' || room.state === 'WAITING_ROOM') {
+		if (admitted && (room.state === 'IDLE' || room.state === 'WAITING_ROOM')) {
 			room.state = 'ACTIVE'
 		}
 
@@ -230,7 +246,8 @@ const joinRoom = async (req, res) => {
 			roomId: room.roomId,
 			participantId,
 			state: room.state,
-			admitted: true,
+			admitted,
+			admissionStatus,
 			room: normalizeRoom(room),
 		})
 	} catch (error) {
@@ -429,18 +446,39 @@ const getSocketEventGuide = (req, res) => {
 		},
 		flow: [
 			'Create or join the room with REST.',
+			'If join returns admitted:false, show the waiting lobby until the host admits the participant.',
 			'Connect Socket.IO with the same access token.',
-			'Emit joinRoom with roomId and participantId.',
+			'Emit joinRoom with roomId and participantId. Waiting participants are kept outside live signaling.',
+			'After admittedFromWaiting, emit joinRoom again to enter the live signaling room.',
 			'Exchange offer, answer, and iceCandidate events between participants.',
 			'Call REST leave endpoint when the call ends.',
 		],
 		events: {
 			joinRoom: {
-				description: 'Join the live signaling room.',
+				description: 'Join the waiting lobby or live signaling room depending on admission status.',
 				payload: {
 					roomId: 'room_abc123',
 					payload: {
 						participantId: 'student-65f12ca7a7720c194de6a002',
+					},
+				},
+			},
+			admitFromWaiting: {
+				description: 'Host/admin admits a waiting participant. The participant should emit joinRoom again after admittedFromWaiting.',
+				payload: {
+					roomId: 'room_abc123',
+					payload: {
+						participantId: 'student-65f12ca7a7720c194de6a002',
+					},
+				},
+			},
+			denyFromWaiting: {
+				description: 'Host/admin denies a waiting participant.',
+				payload: {
+					roomId: 'room_abc123',
+					payload: {
+						participantId: 'student-65f12ca7a7720c194de6a002',
+						reason: 'Not admitted by host',
 					},
 				},
 			},

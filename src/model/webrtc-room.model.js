@@ -11,6 +11,7 @@ const participantSchema = new mongoose.Schema(
 		displayName: { type: String, required: true, trim: true, maxlength: 120 },
 		role: { type: String, enum: PARTICIPANT_ROLES, required: true },
 		admitted: { type: Boolean, default: true },
+		admissionStatus: { type: String, enum: ['waiting', 'admitted', 'denied'], default: 'admitted' },
 		joinedAt: { type: Date, default: Date.now },
 		leftAt: { type: Date, default: null },
 	},

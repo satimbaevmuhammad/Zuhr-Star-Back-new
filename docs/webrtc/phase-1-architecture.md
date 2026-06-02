@@ -2,8 +2,18 @@
 
 ## Implemented Backend Surface
 
-The current backend exposes WebRTC room management over REST and live peer-to-peer
-signaling over Socket.IO.
+The current backend exposes Google Meet-style WebRTC room management over REST
+and live peer-to-peer signaling over Socket.IO.
+
+Important product boundary:
+
+- A "room" is an application concept, not something WebRTC creates by itself.
+- REST creates and manages the meeting room, host, waiting room, participants,
+  chat history, lifecycle state, attendance, and client logs.
+- Socket.IO handles live presence, waiting-room admission, chat, controls, and
+  peer-to-peer WebRTC signaling.
+- WebRTC carries the audio/video/data media after a participant is admitted into
+  the live room.
 
 REST base path:
 
@@ -68,9 +78,27 @@ Content-Type: application/json
 }
 ```
 
+If `waitingRoomEnabled` is `true`, a non-host participant receives a Meet-style
+lobby response instead of immediate access to the live signaling room:
+
+```json
+{
+  "roomId": "room_123",
+  "participantId": "student-65f12ca7a7720c194de6a002",
+  "state": "WAITING_ROOM",
+  "admitted": false,
+  "admissionStatus": "waiting"
+}
+```
+
+The host, admin, and superadmin are admitted immediately. Participants with
+`admissionStatus: "waiting"` must wait for `admittedFromWaiting` before joining
+the live WebRTC signaling room.
+
 ### Socket Events For Browser WebRTC
 
-Join the live signaling room first:
+Connect Socket.IO after REST join. If REST returned `admitted: false`, emit
+`joinRoom` to enter the socket waiting lobby:
 
 ```js
 socket.emit("joinRoom", {
@@ -80,6 +108,35 @@ socket.emit("joinRoom", {
   }
 });
 ```
+
+The host receives `waitingRoomUpdated` in the live room. To admit a participant:
+
+```js
+socket.emit("admitFromWaiting", {
+  roomId: "room_123",
+  payload: {
+    participantId: "student-65f12ca7a7720c194de6a002"
+  }
+});
+```
+
+The waiting participant listens for:
+
+```js
+socket.on("admittedFromWaiting", () => {
+  socket.emit("joinRoom", {
+    roomId: "room_123",
+    payload: {
+      participantId: "student-65f12ca7a7720c194de6a002"
+    }
+  });
+});
+
+socket.on("deniedFromWaiting", event => showDeniedState(event.payload.reason));
+```
+
+Once admitted, join the live signaling room and exchange peer-to-peer WebRTC
+messages.
 
 Send an offer:
 
@@ -125,6 +182,7 @@ socket.on("answer", event => handleAnswer(event.payload));
 socket.on("iceCandidate", event => handleIceCandidate(event.payload));
 socket.on("participantJoined", event => console.log(event.payload));
 socket.on("participantLeft", event => console.log(event.payload));
+socket.on("waitingRoomUpdated", event => renderWaitingRoom(event.payload.participants));
 ```
 
 The current implementation is peer-to-peer signaling. The mediasoup/SFU events
@@ -221,6 +279,27 @@ Transition side effects:
 - Emit `roomStateChanged` to all room participants.
 - Write a MongoDB audit log entry.
 - When leaving `ACTIVE` or `RECORDING` for `ENDING`, close consumers, producers, recv transport, send transport, then schedule router cleanup.
+
+## Meet-Style Room Sequence
+
+```text
+Guest client                         REST API / MongoDB                       Host client
+  | POST /rooms/:id/join                    |                                      |
+  |---------------------------------------->| add participant as waiting           |
+  |<----------------------------------------| admitted:false                       |
+  | emit joinRoom                           |                                      |
+  |---------------------------------------->| join socket waiting lobby            |
+  |                                         | emit waitingRoomUpdated              |
+  |                                         |------------------------------------->|
+  |                                         |                            host admits|
+  |                                         |<-------------------------------------|
+  |                                         | mark participant admitted            |
+  |<----------------------------------------| admittedFromWaiting                  |
+  | emit joinRoom                           |                                      |
+  |---------------------------------------->| join live signaling room             |
+  |<----------------------------------------| roomParticipants                     |
+  | exchange offer/answer/iceCandidate      |                                      |
+```
 
 ## WebRTC Signaling Sequence
 

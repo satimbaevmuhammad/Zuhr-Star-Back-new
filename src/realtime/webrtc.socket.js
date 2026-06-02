@@ -2,6 +2,7 @@ const { Server } = require('socket.io')
 
 const User = require('../model/user.model')
 const Student = require('../model/student.model')
+const { WebRtcRoom } = require('../model/webrtc-room.model')
 const { verifyAccessToken } = require('../utils/token')
 
 const rooms = new Map()
@@ -83,6 +84,44 @@ const participantSummary = socket => ({
 	socketId: socket.id,
 })
 
+const participantSummaryFromDocument = participant => ({
+	participantId: participant.participantId,
+	userId: String(participant.userId),
+	displayName: participant.displayName,
+	role: participant.role,
+	joinedAt: participant.joinedAt ? participant.joinedAt.toISOString() : null,
+	media: {
+		audioEnabled: false,
+		videoEnabled: false,
+		screenSharing: false,
+		handRaised: false,
+	},
+	networkQuality: 0,
+})
+
+const isRoomHost = (room, socket) => {
+	if (String(room.hostUserId) === String(socket.data.userId)) {
+		return true
+	}
+
+	return ['admin', 'superadmin'].includes(socket.data.role)
+}
+
+const getWaitingParticipants = room =>
+	room.participants
+		.filter(participant => participant.admissionStatus === 'waiting' || participant.admitted === false)
+		.map(participantSummaryFromDocument)
+
+const emitWaitingRoomUpdated = (io, room) => {
+	io.to(`webrtc:${room.roomId}`).emit('waitingRoomUpdated', {
+		type: 'waitingRoomUpdated',
+		roomId: room.roomId,
+		senderId: 'server',
+		timestamp: new Date().toISOString(),
+		payload: { participants: getWaitingParticipants(room) },
+	})
+}
+
 const leaveCurrentRoom = socket => {
 	const roomId = socket.data.roomId
 	const participantId = socket.data.participantId
@@ -110,8 +149,10 @@ const leaveCurrentRoom = socket => {
 	})
 
 	socket.leave(`webrtc:${roomId}`)
+	socket.leave(`webrtc-waiting:${roomId}:${participantId}`)
 	socket.data.roomId = null
 	socket.data.participantId = null
+	socket.data.waitingRoomId = null
 }
 
 const attachWebRtcSocketServer = server => {
@@ -158,48 +199,86 @@ const attachWebRtcSocketServer = server => {
 	})
 
 	io.on('connection', socket => {
-		socket.on('joinRoom', (raw, ack) => {
+		socket.on('joinRoom', async (raw, ack) => {
 			const event = normalizeEvent('joinRoom', raw, socket)
-			if (!event.roomId) {
-				emitError(socket, event, 'roomId is required', 'VALIDATION_ERROR')
-				return
-			}
+			try {
+				if (!event.roomId) {
+					emitError(socket, event, 'roomId is required', 'VALIDATION_ERROR')
+					return
+				}
 
-			leaveCurrentRoom(socket)
-			const participantId = String(event.payload.participantId || event.senderId || socket.data.userId).trim()
-			socket.data.roomId = event.roomId
-			socket.data.participantId = participantId
-			socket.data.joinedAt = new Date().toISOString()
-			socket.join(`webrtc:${event.roomId}`)
+				const participantId = String(event.payload.participantId || event.senderId || socket.data.userId).trim()
+				const roomDocument = await WebRtcRoom.findOne({ roomId: event.roomId })
+				if (!roomDocument) {
+					emitError(socket, event, 'WebRTC room not found', 'NOT_FOUND')
+					return
+				}
 
-			const room = getRoom(event.roomId)
-			room.set(participantId, socket.id)
+				const participant = roomDocument.participants.find(item => item.participantId === participantId)
+				if (!participant) {
+					emitError(socket, event, 'Join the room with REST before opening WebRTC signaling', 'NOT_JOINED')
+					return
+				}
 
-			const participants = Array.from(room.keys()).map(id => {
-				const participantSocketId = room.get(id)
-				const participantSocket = io.sockets.sockets.get(participantSocketId)
-				return participantSocket ? participantSummary(participantSocket) : null
-			}).filter(Boolean)
+				const admitted = participant.admitted !== false && participant.admissionStatus !== 'waiting'
+				if (!admitted && !isRoomHost(roomDocument, socket)) {
+					socket.join(`webrtc-waiting:${event.roomId}:${participantId}`)
+					socket.data.waitingRoomId = event.roomId
+					socket.data.participantId = participantId
+					emitWaitingRoomUpdated(io, roomDocument)
+					socket.emit('waitingRoomUpdated', {
+						type: 'waitingRoomUpdated',
+						roomId: event.roomId,
+						senderId: 'server',
+						timestamp: new Date().toISOString(),
+						payload: { participants: [participantSummaryFromDocument(participant)] },
+					})
+					if (typeof ack === 'function') {
+						ack({ ok: true, waiting: true, participantId })
+					}
+					return
+				}
 
-			const joinedEvent = {
-				type: 'participantJoined',
-				roomId: event.roomId,
-				senderId: 'server',
-				timestamp: new Date().toISOString(),
-				payload: participantSummary(socket),
-			}
+				leaveCurrentRoom(socket)
+				socket.data.roomId = event.roomId
+				socket.data.participantId = participantId
+				socket.data.joinedAt = new Date().toISOString()
+				socket.data.waitingRoomId = null
+				socket.join(`webrtc:${event.roomId}`)
+				socket.leave(`webrtc-waiting:${event.roomId}:${participantId}`)
 
-			socket.to(`webrtc:${event.roomId}`).emit('participantJoined', joinedEvent)
-			socket.emit('roomParticipants', {
-				type: 'roomParticipants',
-				roomId: event.roomId,
-				senderId: 'server',
-				timestamp: new Date().toISOString(),
-				payload: { participants },
-			})
+				const room = getRoom(event.roomId)
+				room.set(participantId, socket.id)
 
-			if (typeof ack === 'function') {
-				ack({ ok: true, participantId, participants })
+				const participants = Array.from(room.keys()).map(id => {
+					const participantSocketId = room.get(id)
+					const participantSocket = io.sockets.sockets.get(participantSocketId)
+					return participantSocket ? participantSummary(participantSocket) : null
+				}).filter(Boolean)
+
+				const joinedEvent = {
+					type: 'participantJoined',
+					roomId: event.roomId,
+					senderId: 'server',
+					timestamp: new Date().toISOString(),
+					payload: participantSummary(socket),
+				}
+
+				socket.to(`webrtc:${event.roomId}`).emit('participantJoined', joinedEvent)
+				socket.emit('roomParticipants', {
+					type: 'roomParticipants',
+					roomId: event.roomId,
+					senderId: 'server',
+					timestamp: new Date().toISOString(),
+					payload: { participants },
+				})
+
+				if (typeof ack === 'function') {
+					ack({ ok: true, waiting: false, participantId, participants })
+				}
+			} catch (error) {
+				console.error('WebRTC joinRoom socket failed:', error)
+				emitError(socket, event, 'Failed to join live signaling room', 'INTERNAL_SERVER_ERROR')
 			}
 		})
 
@@ -322,12 +401,100 @@ const attachWebRtcSocketServer = server => {
 			}
 		})
 
+		socket.on('admitFromWaiting', async (raw, ack) => {
+			const event = normalizeEvent('admitFromWaiting', raw, socket)
+			try {
+				const participantId = String(event.payload.participantId || '').trim()
+				const roomDocument = await WebRtcRoom.findOne({ roomId: event.roomId })
+				if (!roomDocument || !participantId) {
+					emitError(socket, event, 'roomId and participantId are required', 'VALIDATION_ERROR')
+					return
+				}
+				if (!isRoomHost(roomDocument, socket)) {
+					emitError(socket, event, 'Only host or admin can admit participants', 'FORBIDDEN')
+					return
+				}
+
+				const participant = roomDocument.participants.find(item => item.participantId === participantId)
+				if (!participant) {
+					emitError(socket, event, 'Participant is not waiting for this room', 'NOT_FOUND')
+					return
+				}
+
+				participant.admitted = true
+				participant.admissionStatus = 'admitted'
+				participant.joinedAt = participant.joinedAt || new Date()
+				if (roomDocument.state === 'IDLE' || roomDocument.state === 'WAITING_ROOM') {
+					roomDocument.state = 'ACTIVE'
+				}
+				await roomDocument.save()
+
+				io.to(`webrtc-waiting:${event.roomId}:${participantId}`).emit('admittedFromWaiting', {
+					type: 'admittedFromWaiting',
+					roomId: event.roomId,
+					senderId: socket.data.participantId || socket.data.userId,
+					timestamp: new Date().toISOString(),
+					payload: { participantId },
+				})
+				emitWaitingRoomUpdated(io, roomDocument)
+				if (typeof ack === 'function') {
+					ack({ ok: true, participantId })
+				}
+			} catch (error) {
+				console.error('WebRTC admitFromWaiting socket failed:', error)
+				emitError(socket, event, 'Failed to admit participant', 'INTERNAL_SERVER_ERROR')
+			}
+		})
+
+		socket.on('denyFromWaiting', async (raw, ack) => {
+			const event = normalizeEvent('denyFromWaiting', raw, socket)
+			try {
+				const participantId = String(event.payload.participantId || '').trim()
+				const roomDocument = await WebRtcRoom.findOne({ roomId: event.roomId })
+				if (!roomDocument || !participantId) {
+					emitError(socket, event, 'roomId and participantId are required', 'VALIDATION_ERROR')
+					return
+				}
+				if (!isRoomHost(roomDocument, socket)) {
+					emitError(socket, event, 'Only host or admin can deny participants', 'FORBIDDEN')
+					return
+				}
+
+				const participant = roomDocument.participants.find(item => item.participantId === participantId)
+				if (!participant) {
+					emitError(socket, event, 'Participant is not waiting for this room', 'NOT_FOUND')
+					return
+				}
+
+				participant.admitted = false
+				participant.admissionStatus = 'denied'
+				participant.leftAt = new Date()
+				await roomDocument.save()
+
+				io.to(`webrtc-waiting:${event.roomId}:${participantId}`).emit('deniedFromWaiting', {
+					type: 'deniedFromWaiting',
+					roomId: event.roomId,
+					senderId: socket.data.participantId || socket.data.userId,
+					timestamp: new Date().toISOString(),
+					payload: {
+						participantId,
+						reason: String(event.payload.reason || 'Denied by host').trim(),
+					},
+				})
+				emitWaitingRoomUpdated(io, roomDocument)
+				if (typeof ack === 'function') {
+					ack({ ok: true, participantId })
+				}
+			} catch (error) {
+				console.error('WebRTC denyFromWaiting socket failed:', error)
+				emitError(socket, event, 'Failed to deny participant', 'INTERNAL_SERVER_ERROR')
+			}
+		})
+
 		for (const eventName of [
 			'kickParticipant',
 			'muteParticipant',
 			'muteAll',
-			'admitFromWaiting',
-			'denyFromWaiting',
 			'startRecording',
 			'stopRecording',
 			'setConsumerPreferredLayers',

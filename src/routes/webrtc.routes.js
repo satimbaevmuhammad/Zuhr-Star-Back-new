@@ -176,8 +176,9 @@ router.get('/rooms/:roomId', requireAnyAuth, webrtcController.getRoom)
  *     tags: [WebRTC]
  *     summary: Join a WebRTC room
  *     description: |
- *       Adds the current authenticated user as a participant. Call this before
- *       connecting to Socket.IO and emitting `joinRoom`.
+ *       Adds the current authenticated user as a participant. With waiting room
+ *       enabled, non-host participants receive `admitted: false` and must wait
+ *       for the host to emit `admitFromWaiting` before joining live signaling.
  *     security:
  *       - bearerAuth: []
  *       - studentBearerAuth: []
@@ -213,6 +214,7 @@ router.get('/rooms/:roomId', requireAnyAuth, webrtcController.getRoom)
  *               participantId: student-65f12ca7a7720c194de6a002
  *               state: ACTIVE
  *               admitted: true
+ *               admissionStatus: admitted
  *       404:
  *         description: Room not found
  *       409:
