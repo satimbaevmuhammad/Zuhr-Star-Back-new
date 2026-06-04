@@ -778,6 +778,111 @@ const runTests = async () => {
 			)
 		})
 
+		await test('WebRTC REST join preserves canonical participant and admitted state', async () => {
+			const hostId = '507f1f77bcf86cd799439171'
+			const studentId = '507f1f77bcf86cd799439172'
+			const room = {
+				_id: '507f1f77bcf86cd799439173',
+				roomId: 'canonical_participant_room',
+				hostUserId: hostId,
+				hostUserType: 'employee',
+				hostParticipantId: `employee-${hostId}`,
+				title: 'Canonical participant lesson',
+				waitingRoomEnabled: true,
+				state: 'ACTIVE',
+				participants: [
+					{
+						participantId: `employee-${hostId}`,
+						userId: hostId,
+						userType: 'employee',
+						displayName: 'Teacher',
+						role: 'teacher',
+						admitted: true,
+						admissionStatus: 'admitted',
+						joinedAt: new Date(),
+					},
+					{
+						participantId: `student-${studentId}`,
+						userId: studentId,
+						userType: 'student',
+						displayName: 'Student',
+						role: 'student',
+						admitted: true,
+						admissionStatus: 'admitted',
+						joinedAt: new Date(),
+					},
+				],
+				save: async () => {},
+				toObject() {
+					return this
+				},
+			}
+
+			await withPatchedMethods(
+				[[WebRtcRoom, 'findOne', async () => room]],
+				async () => {
+					const teacherRes = await callHandler(require('../src/controllers/webrtc.controller').joinRoom, {
+						params: { roomId: room.roomId },
+						user: { id: hostId, userType: 'employee', role: 'teacher' },
+						userDocument: { fullname: 'Teacher', role: 'teacher' },
+						body: { participantId: `teacher-${hostId}` },
+					})
+					assert.strictEqual(teacherRes.statusCode, 200)
+					assert.strictEqual(teacherRes.body.participantId, `employee-${hostId}`)
+
+					const studentRes = await callHandler(require('../src/controllers/webrtc.controller').joinRoom, {
+						params: { roomId: room.roomId },
+						user: { id: studentId, userType: 'student' },
+						student: { fullname: 'Student' },
+						body: { participantId: `student-${studentId}` },
+					})
+					assert.strictEqual(studentRes.statusCode, 200)
+					assert.strictEqual(studentRes.body.admitted, true)
+					assert.strictEqual(studentRes.body.admissionStatus, 'admitted')
+					assert.strictEqual(room.participants[1].admissionStatus, 'admitted')
+				},
+			)
+		})
+
+		await test('WebRTC socket resolves role participant aliases to the authenticated user', async () => {
+			const hostId = '507f1f77bcf86cd799439181'
+			const studentId = '507f1f77bcf86cd799439182'
+			const { resolveSocketParticipant } = require('../src/realtime/webrtc.socket').__private
+			const room = {
+				participants: [
+					{ participantId: `employee-${hostId}`, userId: hostId },
+					{ participantId: `student-${studentId}`, userId: studentId },
+				],
+			}
+			const teacherSocket = {
+				data: {
+					userId: hostId,
+					userType: 'employee',
+					role: 'teacher',
+				},
+			}
+			const studentSocket = {
+				data: {
+					userId: studentId,
+					userType: 'student',
+					role: 'student',
+				},
+			}
+
+			assert.strictEqual(
+				resolveSocketParticipant(room, teacherSocket, `teacher-${hostId}`).participantId,
+				`employee-${hostId}`,
+			)
+			assert.strictEqual(
+				resolveSocketParticipant(room, teacherSocket, hostId).participantId,
+				`employee-${hostId}`,
+			)
+			assert.strictEqual(
+				resolveSocketParticipant(room, studentSocket, `employee-${hostId}`),
+				undefined,
+			)
+		})
+
 		await test('WebRTC student can list active group teacher rooms before joining', async () => {
 			const teacherId = '507f1f77bcf86cd799439161'
 			const studentId = '507f1f77bcf86cd799439162'

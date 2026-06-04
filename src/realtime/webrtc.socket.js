@@ -107,6 +107,54 @@ const isRoomHost = (room, socket) => {
 	return ['admin', 'superadmin'].includes(socket.data.role)
 }
 
+const getParticipantAliases = (socket, requestedParticipantId) => {
+	const aliases = [
+		socket.data.userId,
+		`${socket.data.userType}-${socket.data.userId}`,
+		`${socket.data.role}-${socket.data.userId}`,
+	]
+
+	const ownAliases = new Set(aliases.map(value => String(value || '').trim()).filter(Boolean))
+	const requested = String(requestedParticipantId || '').trim()
+	if (requested) {
+		ownAliases.add(requested)
+	}
+
+	return ownAliases
+}
+
+const resolveSocketParticipant = (room, socket, requestedParticipantId) => {
+	const requested = String(requestedParticipantId || '').trim()
+	if (requested) {
+		const exactParticipant = room.participants.find(
+			participant =>
+				String(participant.userId) === String(socket.data.userId) &&
+				String(participant.participantId) === requested,
+		)
+		if (exactParticipant) {
+			return exactParticipant
+		}
+
+		const ownAliases = new Set([
+			socket.data.userId,
+			`${socket.data.userType}-${socket.data.userId}`,
+			`${socket.data.role}-${socket.data.userId}`,
+		].map(value => String(value || '').trim()).filter(Boolean))
+		if (!ownAliases.has(requested)) {
+			return undefined
+		}
+	}
+
+	const aliases = getParticipantAliases(socket, requestedParticipantId)
+	return room.participants.find(participant => {
+		if (String(participant.userId) !== String(socket.data.userId)) {
+			return false
+		}
+
+		return aliases.has(String(participant.participantId))
+	})
+}
+
 const getWaitingParticipants = room =>
 	room.participants
 		.filter(participant => participant.admissionStatus === 'waiting' || participant.admitted === false)
@@ -207,19 +255,20 @@ const attachWebRtcSocketServer = server => {
 					return
 				}
 
-				const participantId = String(event.payload.participantId || event.senderId || socket.data.userId).trim()
+				const requestedParticipantId = String(event.payload.participantId || event.senderId || socket.data.userId).trim()
 				const roomDocument = await WebRtcRoom.findOne({ roomId: event.roomId })
 				if (!roomDocument) {
 					emitError(socket, event, 'WebRTC room not found', 'NOT_FOUND')
 					return
 				}
 
-				const participant = roomDocument.participants.find(item => item.participantId === participantId)
+				const participant = resolveSocketParticipant(roomDocument, socket, requestedParticipantId)
 				if (!participant) {
 					emitError(socket, event, 'Join the room with REST before opening WebRTC signaling', 'NOT_JOINED')
 					return
 				}
 
+				const participantId = participant.participantId
 				const admitted = participant.admitted !== false && participant.admissionStatus !== 'waiting'
 				if (!admitted && !isRoomHost(roomDocument, socket)) {
 					socket.join(`webrtc-waiting:${event.roomId}:${participantId}`)
@@ -265,7 +314,7 @@ const attachWebRtcSocketServer = server => {
 				}
 
 				socket.to(`webrtc:${event.roomId}`).emit('participantJoined', joinedEvent)
-				socket.emit('roomParticipants', {
+				io.to(`webrtc:${event.roomId}`).emit('roomParticipants', {
 					type: 'roomParticipants',
 					roomId: event.roomId,
 					senderId: 'server',
@@ -530,4 +579,8 @@ const attachWebRtcSocketServer = server => {
 
 module.exports = {
 	attachWebRtcSocketServer,
+	__private: {
+		getParticipantAliases,
+		resolveSocketParticipant,
+	},
 }

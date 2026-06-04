@@ -37,6 +37,29 @@ const parseParticipantId = (value, fallback) => {
 
 const ensureRoomId = roomId => ROOM_ID_PATTERN.test(String(roomId || '').trim())
 
+const getIdentityParticipantAliases = (identity, participantId) => {
+	const aliases = [
+		participantId,
+		identity.userId,
+		`${identity.userType}-${identity.userId}`,
+		`${identity.role}-${identity.userId}`,
+	]
+
+	return new Set(aliases.map(value => String(value || '').trim()).filter(Boolean))
+}
+
+const findParticipantForIdentity = (room, identity, participantId) => {
+	const aliases = getIdentityParticipantAliases(identity, participantId)
+	return room.participants.find(participant => {
+		const sameUser = String(participant.userId) === String(identity.userId)
+		if (!sameUser) {
+			return false
+		}
+
+		return aliases.has(String(participant.participantId))
+	})
+}
+
 const ensureRoomAccess = (room, identity) => {
 	if (identity.role === 'admin' || identity.role === 'superadmin') {
 		return true
@@ -276,9 +299,11 @@ const joinRoom = async (req, res) => {
 			`${identity.userType}-${identity.userId}`,
 		)
 		const displayName = String(req.body.displayName || identity.displayName).trim() || identity.displayName
-		const existing = room.participants.find(participant => participant.participantId === participantId)
-		const admitted = !room.waitingRoomEnabled || canHostRoom(room, identity)
+		const existing = findParticipantForIdentity(room, identity, participantId)
+		const alreadyAdmitted = existing?.admitted !== false && existing?.admissionStatus === 'admitted'
+		const admitted = alreadyAdmitted || !room.waitingRoomEnabled || canHostRoom(room, identity)
 		const admissionStatus = admitted ? 'admitted' : 'waiting'
+		const canonicalParticipantId = existing?.participantId || participantId
 
 		if (existing) {
 			existing.leftAt = null
@@ -309,7 +334,7 @@ const joinRoom = async (req, res) => {
 
 		return res.status(200).json({
 			roomId: room.roomId,
-			participantId,
+			participantId: canonicalParticipantId,
 			state: room.state,
 			admitted,
 			admissionStatus,
