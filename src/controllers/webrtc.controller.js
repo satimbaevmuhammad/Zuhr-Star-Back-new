@@ -1,6 +1,7 @@
 const crypto = require('crypto')
 const mongoose = require('mongoose')
 
+const Group = require('../model/group.model')
 const { ROOM_STATES, WebRtcRoom } = require('../model/webrtc-room.model')
 
 const ROOM_ID_PATTERN = /^[A-Za-z0-9_-]{3,80}$/
@@ -48,6 +49,74 @@ const ensureRoomAccess = (room, identity) => {
 	return room.participants.some(participant =>
 		String(participant.userId) === String(identity.userId),
 	)
+}
+
+const getActiveStudentGroups = async student => {
+	const studentId = student?._id || student?.id
+	if (!studentId || !mongoose.isValidObjectId(studentId)) {
+		return []
+	}
+
+	const activeGroupIds = (student.groups || [])
+		.filter(groupItem => groupItem?.status === 'active' && groupItem.group)
+		.map(groupItem => groupItem.group)
+
+	const groupFilters = [{ students: studentId }]
+	if (activeGroupIds.length > 0) {
+		groupFilters.push({ _id: { $in: activeGroupIds } })
+	}
+
+	return Group.find({
+		status: 'active',
+		$or: groupFilters,
+	})
+		.select('teacher supportTeachers')
+		.lean()
+}
+
+const getStudentTeacherIds = async student => {
+	const groups = await getActiveStudentGroups(student)
+	const teacherIds = new Set()
+
+	for (const group of groups) {
+		if (group.teacher) {
+			teacherIds.add(String(group.teacher))
+		}
+		for (const supportTeacherId of group.supportTeachers || []) {
+			teacherIds.add(String(supportTeacherId))
+		}
+	}
+
+	return Array.from(teacherIds).filter(mongoose.isValidObjectId)
+}
+
+const canAccessStudentTeacherRoom = async (room, identity, student) => {
+	if (identity.userType !== 'student') {
+		return false
+	}
+
+	const teacherIds = await getStudentTeacherIds(student)
+	return teacherIds.some(teacherId => String(room.hostUserId) === teacherId)
+}
+
+const buildVisibleRoomsQuery = async (identity, student) => {
+	if (['admin', 'superadmin'].includes(identity.role)) {
+		return {}
+	}
+
+	const visibleRoomFilters = [
+		{ hostUserId: identity.userId },
+		{ 'participants.userId': identity.userId },
+	]
+
+	if (identity.userType === 'student') {
+		const teacherIds = await getStudentTeacherIds(student)
+		if (teacherIds.length > 0) {
+			visibleRoomFilters.push({ hostUserId: { $in: teacherIds } })
+		}
+	}
+
+	return { $or: visibleRoomFilters }
 }
 
 const canHostRoom = (room, identity) => {
@@ -139,20 +208,13 @@ const listRooms = async (req, res) => {
 		const identity = getIdentity(req)
 		const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1)
 		const limit = Math.min(100, Math.max(1, Number.parseInt(req.query.limit, 10) || 20))
-		const query = {}
+		const query = await buildVisibleRoomsQuery(identity, req.student)
 
 		if (req.query.state) {
 			if (!ROOM_STATES.includes(req.query.state)) {
 				return sendError(res, 400, 'Invalid room state', 'VALIDATION_ERROR', 'state')
 			}
 			query.state = req.query.state
-		}
-
-		if (!['admin', 'superadmin'].includes(identity.role)) {
-			query.$or = [
-				{ hostUserId: identity.userId },
-				{ 'participants.userId': identity.userId },
-			]
 		}
 
 		const [total, rooms] = await Promise.all([
@@ -183,7 +245,10 @@ const getRoom = async (req, res) => {
 			return sendError(res, 404, 'WebRTC room not found', 'NOT_FOUND')
 		}
 
-		if (!ensureRoomAccess(room, identity)) {
+		const canAccessRoom =
+			ensureRoomAccess(room, identity) ||
+			(await canAccessStudentTeacherRoom(room, identity, req.student))
+		if (!canAccessRoom) {
 			return sendError(res, 403, 'Forbidden', 'FORBIDDEN')
 		}
 

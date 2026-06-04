@@ -778,6 +778,83 @@ const runTests = async () => {
 			)
 		})
 
+		await test('WebRTC student can list active group teacher rooms before joining', async () => {
+			const teacherId = '507f1f77bcf86cd799439161'
+			const studentId = '507f1f77bcf86cd799439162'
+			const groupId = '507f1f77bcf86cd799439163'
+			const room = {
+				_id: '507f1f77bcf86cd799439164',
+				roomId: 'teacher_group_room',
+				hostUserId: teacherId,
+				hostUserType: 'employee',
+				hostParticipantId: `employee-${teacherId}`,
+				title: 'Teacher group room',
+				waitingRoomEnabled: true,
+				state: 'WAITING_ROOM',
+				participants: [
+					{
+						participantId: `employee-${teacherId}`,
+						userId: teacherId,
+						userType: 'employee',
+						displayName: 'Teacher',
+						role: 'teacher',
+						admitted: true,
+						admissionStatus: 'admitted',
+						joinedAt: new Date(),
+					},
+				],
+				toObject() {
+					return this
+				},
+			}
+			let capturedRoomsQuery = null
+
+			await withPatchedMethods(
+				[
+					[
+						Group,
+						'find',
+						() => makeQuery([
+							{
+								_id: groupId,
+								teacher: teacherId,
+								supportTeachers: [],
+							},
+						]),
+					],
+					[
+						WebRtcRoom,
+						'countDocuments',
+						async query => {
+							capturedRoomsQuery = query
+							return 1
+						},
+					],
+					[WebRtcRoom, 'find', () => makeQuery([room])],
+				],
+				async () => {
+					const res = await callHandler(require('../src/controllers/webrtc.controller').listRooms, {
+						query: {},
+						user: { id: studentId, userType: 'student' },
+						student: {
+							_id: studentId,
+							fullname: 'Student',
+							groups: [{ group: groupId, status: 'active' }],
+						},
+					})
+
+					assert.strictEqual(res.statusCode, 200)
+					assert.strictEqual(res.body.total, 1)
+					assert.strictEqual(res.body.data[0].roomId, room.roomId)
+					assert(
+						capturedRoomsQuery.$or.some(
+							filter => filter.hostUserId?.$in?.includes(teacherId),
+						),
+					)
+				},
+			)
+		})
+
 		await test('createGroup with courseId auto-links lessons from course methodology', async () => {
 			const groupId = '507f1f77bcf86cd799439051'
 			const courseId = '507f1f77bcf86cd799439052'
