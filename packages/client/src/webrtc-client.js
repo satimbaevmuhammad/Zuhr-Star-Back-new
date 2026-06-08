@@ -60,14 +60,63 @@ class WebRTCClient {
 			console.log('[WebRTC] leaveRoom response:', event)
 		})
 
+		// Handle roomParticipants list update (sent when we join or room changes)
+		this.socket.on('roomParticipants', async (event) => {
+			const { payload } = event
+			console.log('[WebRTC] Room participants updated:', payload.participants)
+
+			try {
+				if (!payload.participants || !Array.isArray(payload.participants)) {
+					return
+				}
+
+				// Create peer connections to all participants we're not already connected to
+				for (const participant of payload.participants) {
+					const participantId = participant.participantId
+					
+					// Skip ourselves
+					if (participantId === this.participantId) {
+						continue
+					}
+
+					// Skip if already connected
+					if (this.peerConnections.has(participantId)) {
+						continue
+					}
+
+					// Only create offer if we have local stream
+					if (this.localStream) {
+						try {
+							await this.createPeerConnection(participantId, true) // initiator
+						} catch (error) {
+							console.warn(`[WebRTC] Failed to create connection to ${participantId}:`, error)
+						}
+					}
+				}
+			} catch (error) {
+				console.error('[WebRTC] Error handling roomParticipants:', error)
+				if (this.handlers.onError) {
+					this.handlers.onError({
+						code: 'ROOM_PARTICIPANTS_ERROR',
+						message: error.message,
+					})
+				}
+			}
+		})
+
 		// BUG 1 FIX: Handle participantJoined by creating offer to newcomer
 		this.socket.on('participantJoined', async (event) => {
 			const { payload } = event
 			console.log('[WebRTC] Participant joined:', payload.participantId)
 
 			try {
-				// Only create offer if we already have a local stream
-				if (this.localStream) {
+				// Skip if it's ourselves (shouldn't happen, but safety check)
+				if (payload.participantId === this.participantId) {
+					return
+				}
+
+				// Only create offer if we already have a local stream and not already connected
+				if (this.localStream && !this.peerConnections.has(payload.participantId)) {
 					await this.createPeerConnection(
 						payload.participantId,
 						true, // initiator
@@ -287,6 +336,7 @@ class WebRTCClient {
 
 	/**
 	 * Join a room and emit joinRoom event
+	 * Also creates peer connections to existing participants
 	 */
 	async joinRoom(roomId, participantId) {
 		this.roomId = roomId
@@ -299,11 +349,37 @@ class WebRTCClient {
 					roomId,
 					payload: { participantId },
 				},
-				(response) => {
-					if (response?.ok) {
-						resolve(response)
-					} else {
-						reject(new Error('Failed to join room'))
+				async (response) => {
+					try {
+						if (response?.ok) {
+							// Create peer connections to any existing participants returned in ack
+							if (response.participants && Array.isArray(response.participants) && this.localStream) {
+								console.log('[WebRTC] Creating connections to existing participants:', 
+									response.participants.map(p => p.participantId))
+								
+								for (const participant of response.participants) {
+									const pId = participant.participantId
+									// Skip ourselves
+									if (pId === this.participantId) {
+										continue
+									}
+									// Skip if already connected
+									if (this.peerConnections.has(pId)) {
+										continue
+									}
+									try {
+										await this.createPeerConnection(pId, true) // initiator
+									} catch (error) {
+										console.warn(`[WebRTC] Failed to create connection to ${pId}:`, error)
+									}
+								}
+							}
+							resolve(response)
+						} else {
+							reject(new Error('Failed to join room'))
+						}
+					} catch (error) {
+						reject(error)
 					}
 				},
 			)
