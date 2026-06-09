@@ -11,6 +11,7 @@
   ],
   "scripts": {
     "test": "node scripts/smoke.test.js && node scripts/senior.test.js",
+    "test:webrtc": "node scripts/test-webrtc.js",
     "start": "nodemon index.js",
     "webrtc:build": "npm run build --workspaces --if-present",
     "webrtc:typecheck": "npm run typecheck --workspaces --if-present"

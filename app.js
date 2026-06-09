@@ -110,6 +110,18 @@ app.get('/face-id-demo', (req, res) => {
 	res.sendFile(path.join(process.cwd(), 'public', 'face-id-demo.html'))
 })
 
+app.get('/teacher', (req, res) => {
+	res.sendFile(path.join(process.cwd(), 'public', 'teacher.html'))
+})
+
+app.get('/join', (req, res) => {
+	res.sendFile(path.join(process.cwd(), 'public', 'join.html'))
+})
+
+app.get('/meeting', (req, res) => {
+	res.sendFile(path.join(process.cwd(), 'public', 'meeting.html'))
+})
+
 app.get('/health', (req, res) => {
 	res.status(200).json({ status: 'ok' })
 })

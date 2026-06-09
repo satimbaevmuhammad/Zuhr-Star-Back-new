@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<title>Teacher Dashboard - Zuhr Meeting</title>
+	<style>
+		* {
+			margin: 0;
+			padding: 0;
+			box-sizing: border-box;
+		}
+
+		body {
+			font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+			background: #f0f2f5;
+			padding: 20px;
+		}
+
+		.container {
+			max-width: 1000px;
+			margin: 0 auto;
+		}
+
+		header {
+			background: white;
+			padding: 30px;
+			border-radius: 8px;
+			box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+			margin-bottom: 30px;
+		}
+
+		h1 {
+			color: #1c1e21;
+			margin-bottom: 10px;
+		}
+
+		.subtitle {
+			color: #65676b;
+			font-size: 16px;
+		}
+
+		.main-grid {
+			display: grid;
+			grid-template-columns: 1fr 1fr;
+			gap: 20px;
+			margin-bottom: 20px;
+		}
+
+		.card {
+			background: white;
+			padding: 30px;
+			border-radius: 8px;
+			box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+		}
+
+		.card h2 {
+			color: #1c1e21;
+			margin-bottom: 20px;
+			font-size: 20px;
+		}
+
+		.form-group {
+			margin-bottom: 20px;
+		}
+
+		label {
+			display: block;
+			margin-bottom: 8px;
+			color: #1c1e21;
+			font-weight: 500;
+			font-size: 14px;
+		}
+
+		input {
+			width: 100%;
+			padding: 12px;
+			border: 1px solid #ccc;
+			border-radius: 4px;
+			font-size: 14px;
+		}
+
+		input:focus {
+			outline: none;
+			border-color: #0a66c2;
+			box-shadow: 0 0 0 3px rgba(10, 102, 194, 0.1);
+		}
+
+		button {
+			width: 100%;
+			padding: 12px;
+			border: none;
+			border-radius: 4px;
+			font-size: 14px;
+			font-weight: 600;
+			cursor: pointer;
+			transition: all 0.2s;
+		}
+
+		.btn-primary {
+			background: #0a66c2;
+			color: white;
+		}
+
+		.btn-primary:hover {
+			background: #084398;
+		}
+
+		.btn-primary:disabled {
+			background: #ccc;
+			cursor: not-allowed;
+		}
+
+		.btn-success {
+			background: #2e7d32;
+			color: white;
+		}
+
+		.btn-success:hover {
+			background: #1b5e20;
+		}
+
+		.meeting-info {
+			background: #e8f5e9;
+			padding: 20px;
+			border-radius: 8px;
+			border-left: 4px solid #2e7d32;
+		}
+
+		.meeting-info h3 {
+			color: #1b5e20;
+			margin-bottom: 12px;
+		}
+
+		.info-item {
+			margin-bottom: 12px;
+			font-size: 14px;
+			color: #2e7d32;
+		}
+
+		.info-label {
+			font-weight: 600;
+			color: #1b5e20;
+		}
+
+		.copy-link {
+			background: white;
+			border: 1px solid #ccc;
+			padding: 10px;
+			border-radius: 4px;
+			font-family: monospace;
+			font-size: 12px;
+			word-break: break-all;
+			margin-bottom: 10px;
+			display: flex;
+			justify-content: space-between;
+			align-items: center;
+		}
+
+		.copy-btn {
+			background: #0a66c2;
+			color: white;
+			padding: 6px 12px;
+			border: none;
+			border-radius: 4px;
+			font-size: 12px;
+			cursor: pointer;
+			flex-shrink: 0;
+			margin-left: 10px;
+		}
+
+		.copy-btn:hover {
+			background: #084398;
+		}
+
+		.copy-btn.copied {
+			background: #2e7d32;
+		}
+
+		.status {
+			padding: 15px;
+			border-radius: 4px;
+			margin-bottom: 15px;
+			font-size: 14px;
+		}
+
+		.status.error {
+			background: #fde7e9;
+			color: #c41419;
+		}
+
+		.status.success {
+			background: #e8f5e9;
+			color: #2e7d32;
+		}
+
+		.loading {
+			display: inline-block;
+			animation: spin 1s linear infinite;
+		}
+
+		@keyframes spin {
+			to {
+				transform: rotate(360deg);
+			}
+		}
+
+		.student-links {
+			background: #f0f2f5;
+			padding: 20px;
+			border-radius: 8px;
+			margin-top: 20px;
+		}
+
+		.student-links h4 {
+			color: #1c1e21;
+			margin-bottom: 15px;
+			font-size: 14px;
+		}
+
+		.student-link-item {
+			margin-bottom: 10px;
+		}
+
+		.btn-join {
+			width: 100%;
+			padding: 12px;
+			margin-top: 20px;
+		}
+
+		@media (max-width: 768px) {
+			.main-grid {
+				grid-template-columns: 1fr;
+			}
+		}
+	</style>
+</head>
+<body>
+	<div class="container">
+		<header>
+			<h1>👨‍🏫 Teacher Dashboard</h1>
+			<p class="subtitle">Create and manage online class meetings</p>
+		</header>
+
+		<div class="main-grid">
+			<!-- Create Room Card -->
+			<div class="card">
+				<h2>Create New Meeting</h2>
+				<div id="createStatus"></div>
+
+				<div class="form-group">
+					<label for="teacherName">Your Name:</label>
+					<input
+						type="text"
+						id="teacherName"
+						placeholder="e.g., Mr. Ahmed"
+						value="Teacher 1"
+					/>
+				</div>
+
+				<div class="form-group">
+					<label for="className">Class Name:</label>
+					<input
+						type="text"
+						id="className"
+						placeholder="e.g., English 101"
+						value="Class 101"
+					/>
+				</div>
+
+				<div class="form-group">
+					<label for="serverUrl">Server URL:</label>
+					<input
+						type="text"
+						id="serverUrl"
+						placeholder="http://localhost:3000"
+						value="http://localhost:3000"
+					/>
+				</div>
+
+				<div class="form-group">
+					<label for="teacherToken">Your JWT Token:</label>
+					<input type="password" id="teacherToken" placeholder="Paste your JWT token" />
+				</div>
+
+				<button class="btn-primary" id="createBtn" onclick="createMeeting()">
+					Create Meeting
+				</button>
+			</div>
+
+			<!-- Active Meeting Card -->
+			<div class="card">
+				<h2>Active Meeting</h2>
+				<div id="meetingStatus" style="display: none">
+					<div class="meeting-info">
+						<h3>Meeting Details</h3>
+						<div class="info-item">
+							<span class="info-label">Room ID:</span>
+							<span id="roomIdDisplay"></span>
+						</div>
+						<div class="info-item">
+							<span class="info-label">Status:</span>
+							<span id="statusDisplay">Ready</span>
+						</div>
+						<div class="info-item">
+							<span class="info-label">Participants:</span>
+							<span id="participantCount">1</span>
+						</div>
+
+						<button class="btn-success btn-join" id="joinMeetingBtn" onclick="joinAsTeacher()">
+							🎥 Join Meeting
+						</button>
+					</div>
+
+					<div class="student-links">
+						<h4>Share These Links with Students:</h4>
+						<div id="studentLinksContainer"></div>
+					</div>
+				</div>
+
+				<div id="noMeeting" style="text-align: center; color: #65676b; padding: 40px 0">
+					<p>Create a meeting to get started</p>
+				</div>
+			</div>
+		</div>
+	</div>
+
+	<script>
+		let currentRoom = null
+
+		async function createMeeting() {
+			const teacherName = document.getElementById('teacherName').value.trim()
+			const className = document.getElementById('className').value.trim()
+			const serverUrl = document.getElementById('serverUrl').value.trim()
+			const teacherToken = document.getElementById('teacherToken').value.trim()
+
+			if (!teacherName || !className || !serverUrl || !teacherToken) {
+				showStatus('createStatus', '❌ All fields are required', true)
+				return
+			}
+
+			try {
+				document.getElementById('createBtn').disabled = true
+				document.getElementById('createBtn').innerHTML = '<span class="loading">⏳</span> Creating...'
+				showStatus('createStatus', '', false)
+
+				const response = await fetch(`${serverUrl}/api/webrtc/rooms`, {
+					method: 'POST',
+					headers: {
+						'Content-Type': 'application/json',
+						'Authorization': `Bearer ${teacherToken}`,
+					},
+					body: JSON.stringify({
+						title: `${className} - ${new Date().toLocaleString()}`,
+					}),
+				})
+
+				if (!response.ok) {
+					throw new Error(`Failed to create room: ${response.statusText}`)
+				}
+
+				const data = await response.json()
+				console.log('Room created:', data)
+
+				currentRoom = {
+					roomId: data.roomId,
+					teacherName,
+					className,
+					serverUrl,
+					teacherToken,
+					participantId: data.participantId,
+				}
+
+				// Save to localStorage so we can restore if page reloads
+				localStorage.setItem('currentRoom', JSON.stringify(currentRoom))
+
+				showStatus('createStatus', '✅ Meeting created successfully!', false)
+				displayMeetingInfo()
+			} catch (error) {
+				console.error('Failed to create meeting:', error)
+				showStatus('createStatus', `❌ ${error.message}`, true)
+				document.getElementById('createBtn').disabled = false
+				document.getElementById('createBtn').innerHTML = 'Create Meeting'
+			}
+		}
+
+		function displayMeetingInfo() {
+			const noMeeting = document.getElementById('noMeeting')
+			const meetingStatus = document.getElementById('meetingStatus')
+			const roomIdDisplay = document.getElementById('roomIdDisplay')
+			const studentLinksContainer = document.getElementById('studentLinksContainer')
+
+			if (!currentRoom) {
+				noMeeting.style.display = 'block'
+				meetingStatus.style.display = 'none'
+				return
+			}
+
+			noMeeting.style.display = 'none'
+			meetingStatus.style.display = 'block'
+
+			roomIdDisplay.textContent = currentRoom.roomId
+
+			// Generate student links
+			const links = []
+			for (let i = 1; i <= 3; i++) {
+				const studentToken = prompt(`Enter JWT token for Student ${i} (or skip):`)
+				if (studentToken && studentToken.trim()) {
+					const joinUrl = new URL('/join', currentRoom.serverUrl)
+					joinUrl.searchParams.set('roomId', currentRoom.roomId)
+					joinUrl.searchParams.set('token', studentToken.trim())
+					joinUrl.searchParams.set('displayName', `Student ${i}`)
+
+					links.push({
+						name: `Student ${i}`,
+						url: joinUrl.toString(),
+					})
+				}
+			}
+
+			if (links.length > 0) {
+				studentLinksContainer.innerHTML = links
+					.map(
+						(link) => `
+					<div class="student-link-item">
+						<strong>${link.name}:</strong>
+						<div class="copy-link">
+							<span>${link.url}</span>
+							<button class="copy-btn" onclick="copyToClipboard('${link.url}')">Copy</button>
+						</div>
+					</div>
+				`,
+					)
+					.join('')
+			} else {
+				studentLinksContainer.innerHTML = '<p style="color: #65676b;">Add student tokens to generate links</p>'
+			}
+		}
+
+		function copyToClipboard(text) {
+			navigator.clipboard.writeText(text).then(() => {
+				alert('Link copied to clipboard!')
+			})
+		}
+
+		async function joinAsTeacher() {
+			if (!currentRoom) return
+
+			try {
+				// Redirect to meeting page with teacher info pre-filled
+				const meetingUrl = new URL('/meeting', currentRoom.serverUrl)
+				meetingUrl.searchParams.set('roomId', currentRoom.roomId)
+				meetingUrl.searchParams.set('accessToken', currentRoom.teacherToken)
+				meetingUrl.searchParams.set('displayName', `${currentRoom.teacherName} (Teacher)`)
+				meetingUrl.searchParams.set('participantId', currentRoom.participantId)
+
+				window.location.href = meetingUrl.toString()
+			} catch (error) {
+				console.error('Failed to join:', error)
+				showStatus('createStatus', `❌ ${error.message}`, true)
+			}
+		}
+
+		function showStatus(elementId, message, isError) {
+			const element = document.getElementById(elementId)
+			if (message) {
+				element.innerHTML = `<div class="status ${isError ? 'error' : 'success'}">${message}</div>`
+				element.style.display = 'block'
+			} else {
+				element.style.display = 'none'
+			}
+		}
+
+		// Restore room from localStorage if page reloads
+		window.addEventListener('load', () => {
+			const saved = localStorage.getItem('currentRoom')
+			if (saved) {
+				currentRoom = JSON.parse(saved)
+				displayMeetingInfo()
+				document.getElementById('teacherName').value = currentRoom.teacherName
+				document.getElementById('className').value = currentRoom.className
+				document.getElementById('serverUrl').value = currentRoom.serverUrl
+			}
+		})
+	</script>
+</body>
+</html>
