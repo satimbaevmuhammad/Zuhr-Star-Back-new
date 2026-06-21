@@ -55,6 +55,29 @@ const groupScheduleSchema = new mongoose.Schema(
 	{ _id: false },
 )
 
+// Holds the Google Meet room currently linked to this group. Created via the
+// group teacher's connected Google account (see /api/google/connect and
+// /api/groups/:groupId/meet). The Meet link itself does not expire on
+// startTime/endTime — it stays valid for every lesson until a teacher/admin
+// explicitly ends it, which deletes the underlying Calendar event.
+const googleMeetSchema = new mongoose.Schema(
+	{
+		eventId: { type: String, default: null },
+		calendarId: { type: String, default: 'primary' },
+		meetLink: { type: String, default: null },
+		htmlLink: { type: String, default: null },
+		summary: { type: String, default: null },
+		status: { type: String, enum: ['none', 'scheduled', 'ended'], default: 'none' },
+		startTime: { type: Date, default: null },
+		endTime: { type: Date, default: null },
+		createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+		createdByName: { type: String, default: null },
+		createdAt: { type: Date, default: null },
+		endedAt: { type: Date, default: null },
+	},
+	{ _id: false },
+)
+
 const groupAttendanceSchema = new mongoose.Schema(
 	{
 		student: {
@@ -288,6 +311,10 @@ const groupSchema = new mongoose.Schema(
 			type: String,
 			trim: true,
 			maxlength: 1000,
+		},
+		googleMeet: {
+			type: googleMeetSchema,
+			default: () => ({}),
 		},
 	},
 	{ timestamps: true },

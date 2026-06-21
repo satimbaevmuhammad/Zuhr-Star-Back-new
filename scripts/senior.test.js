@@ -16,6 +16,7 @@ const authMiddleware = require('../src/middleware/auth.middleware')
 const authController = require('../src/controllers/auth.controller')
 const studentController = require('../src/controllers/student.controller')
 const groupController = require('../src/controllers/group.controller')
+const meetController = require('../src/controllers/meet.controller')
 const courseController = require('../src/controllers/course.controller')
 const {
 	resetStudentBalancesIfNeeded,
@@ -31,7 +32,6 @@ const Group = require('../src/model/group.model')
 const Course = require('../src/model/course.model')
 const Lesson = require('../src/model/lesson.model')
 const ExtraLesson = require('../src/model/extra-lesson.model').ExtraLesson
-const { WebRtcRoom } = require('../src/model/webrtc-room.model')
 const Role = require('../src/models/Role.model')
 const FaceCredential = require('../src/models/FaceCredential.model')
 
@@ -728,234 +728,191 @@ const runTests = async () => {
 			)
 		})
 
-		await test('WebRTC waiting room keeps non-host participants pending', async () => {
-			const hostId = '507f1f77bcf86cd799439151'
-			const studentId = '507f1f77bcf86cd799439152'
-			const room = {
-				_id: '507f1f77bcf86cd799439153',
-				roomId: 'room_meet_style',
-				hostUserId: hostId,
-				hostUserType: 'employee',
-				hostParticipantId: `employee-${hostId}`,
-				title: 'Meet style lesson',
-				waitingRoomEnabled: true,
-				state: 'WAITING_ROOM',
-				participants: [
-					{
-						participantId: `employee-${hostId}`,
-						userId: hostId,
-						userType: 'employee',
-						displayName: 'Teacher',
-						role: 'teacher',
-						admitted: true,
-						admissionStatus: 'admitted',
-						joinedAt: new Date(),
-					},
-				],
+		await test('createGroupMeeting creates a Calendar event with a Meet link and links it to the group', async () => {
+			const groupId = '507f1f77bcf86cd799439201'
+			const teacherId = '507f1f77bcf86cd799439202'
+			const group = {
+				_id: groupId,
+				name: 'Algebra 101',
+				course: 'Algebra',
+				googleMeet: { status: 'none' },
 				save: async () => {},
-				toObject() {
-					return this
-				},
 			}
-
-			await withPatchedMethods(
-				[[WebRtcRoom, 'findOne', async () => room]],
-				async () => {
-					const res = await callHandler(require('../src/controllers/webrtc.controller').joinRoom, {
-						params: { roomId: room.roomId },
-						user: { id: studentId, userType: 'student' },
-						student: { fullname: 'Student' },
-						body: { participantId: `student-${studentId}` },
-					})
-
-					assert.strictEqual(res.statusCode, 200)
-					assert.strictEqual(res.body.admitted, false)
-					assert.strictEqual(res.body.admissionStatus, 'waiting')
-					assert.strictEqual(room.state, 'WAITING_ROOM')
-					assert.strictEqual(room.participants[1].admissionStatus, 'waiting')
-					assert.strictEqual(room.participants[1].joinedAt, null)
-				},
-			)
-		})
-
-		await test('WebRTC REST join preserves canonical participant and admitted state', async () => {
-			const hostId = '507f1f77bcf86cd799439171'
-			const studentId = '507f1f77bcf86cd799439172'
-			const room = {
-				_id: '507f1f77bcf86cd799439173',
-				roomId: 'canonical_participant_room',
-				hostUserId: hostId,
-				hostUserType: 'employee',
-				hostParticipantId: `employee-${hostId}`,
-				title: 'Canonical participant lesson',
-				waitingRoomEnabled: true,
-				state: 'ACTIVE',
-				participants: [
-					{
-						participantId: `employee-${hostId}`,
-						userId: hostId,
-						userType: 'employee',
-						displayName: 'Teacher',
-						role: 'teacher',
-						admitted: true,
-						admissionStatus: 'admitted',
-						joinedAt: new Date(),
-					},
-					{
-						participantId: `student-${studentId}`,
-						userId: studentId,
-						userType: 'student',
-						displayName: 'Student',
-						role: 'student',
-						admitted: true,
-						admissionStatus: 'admitted',
-						joinedAt: new Date(),
-					},
-				],
-				save: async () => {},
-				toObject() {
-					return this
-				},
+			const teacher = {
+				_id: teacherId,
+				fullname: 'Mr. Ahmed',
+				googleAccount: { connected: true, refreshToken: 'refresh-token-abc' },
 			}
-
-			await withPatchedMethods(
-				[[WebRtcRoom, 'findOne', async () => room]],
-				async () => {
-					const teacherRes = await callHandler(require('../src/controllers/webrtc.controller').joinRoom, {
-						params: { roomId: room.roomId },
-						user: { id: hostId, userType: 'employee', role: 'teacher' },
-						userDocument: { fullname: 'Teacher', role: 'teacher' },
-						body: { participantId: `teacher-${hostId}` },
-					})
-					assert.strictEqual(teacherRes.statusCode, 200)
-					assert.strictEqual(teacherRes.body.participantId, `employee-${hostId}`)
-
-					const studentRes = await callHandler(require('../src/controllers/webrtc.controller').joinRoom, {
-						params: { roomId: room.roomId },
-						user: { id: studentId, userType: 'student' },
-						student: { fullname: 'Student' },
-						body: { participantId: `student-${studentId}` },
-					})
-					assert.strictEqual(studentRes.statusCode, 200)
-					assert.strictEqual(studentRes.body.admitted, true)
-					assert.strictEqual(studentRes.body.admissionStatus, 'admitted')
-					assert.strictEqual(room.participants[1].admissionStatus, 'admitted')
-				},
-			)
-		})
-
-		await test('WebRTC socket resolves role participant aliases to the authenticated user', async () => {
-			const hostId = '507f1f77bcf86cd799439181'
-			const studentId = '507f1f77bcf86cd799439182'
-			const { resolveSocketParticipant } = require('../src/realtime/webrtc.socket').__private
-			const room = {
-				participants: [
-					{ participantId: `employee-${hostId}`, userId: hostId },
-					{ participantId: `student-${studentId}`, userId: studentId },
-				],
-			}
-			const teacherSocket = {
-				data: {
-					userId: hostId,
-					userType: 'employee',
-					role: 'teacher',
-				},
-			}
-			const studentSocket = {
-				data: {
-					userId: studentId,
-					userType: 'student',
-					role: 'student',
-				},
-			}
-
-			assert.strictEqual(
-				resolveSocketParticipant(room, teacherSocket, `teacher-${hostId}`).participantId,
-				`employee-${hostId}`,
-			)
-			assert.strictEqual(
-				resolveSocketParticipant(room, teacherSocket, hostId).participantId,
-				`employee-${hostId}`,
-			)
-			assert.strictEqual(
-				resolveSocketParticipant(room, studentSocket, `employee-${hostId}`),
-				undefined,
-			)
-		})
-
-		await test('WebRTC student can list active group teacher rooms before joining', async () => {
-			const teacherId = '507f1f77bcf86cd799439161'
-			const studentId = '507f1f77bcf86cd799439162'
-			const groupId = '507f1f77bcf86cd799439163'
-			const room = {
-				_id: '507f1f77bcf86cd799439164',
-				roomId: 'teacher_group_room',
-				hostUserId: teacherId,
-				hostUserType: 'employee',
-				hostParticipantId: `employee-${teacherId}`,
-				title: 'Teacher group room',
-				waitingRoomEnabled: true,
-				state: 'WAITING_ROOM',
-				participants: [
-					{
-						participantId: `employee-${teacherId}`,
-						userId: teacherId,
-						userType: 'employee',
-						displayName: 'Teacher',
-						role: 'teacher',
-						admitted: true,
-						admissionStatus: 'admitted',
-						joinedAt: new Date(),
-					},
-				],
-				toObject() {
-					return this
-				},
-			}
-			let capturedRoomsQuery = null
+			let createMeetEventCall = null
 
 			await withPatchedMethods(
 				[
+					[Group, 'findById', async () => group],
+					[User, 'findById', () => makeQuery(teacher)],
 					[
-						Group,
-						'find',
-						() => makeQuery([
-							{
-								_id: groupId,
-								teacher: teacherId,
-								supportTeachers: [],
-							},
-						]),
-					],
-					[
-						WebRtcRoom,
-						'countDocuments',
-						async query => {
-							capturedRoomsQuery = query
-							return 1
+						require('../src/services/google-calendar.service'),
+						'createMeetEvent',
+						async params => {
+							createMeetEventCall = params
+							return {
+								id: 'event-123',
+								htmlLink: 'https://calendar.google.com/event?eid=abc',
+								hangoutLink: 'https://meet.google.com/abc-defg-hij',
+							}
 						},
 					],
-					[WebRtcRoom, 'find', () => makeQuery([room])],
 				],
 				async () => {
-					const res = await callHandler(require('../src/controllers/webrtc.controller').listRooms, {
-						query: {},
-						user: { id: studentId, userType: 'student' },
-						student: {
-							_id: studentId,
-							fullname: 'Student',
-							groups: [{ group: groupId, status: 'active' }],
+					const res = await callHandler(meetController.createGroupMeeting, {
+						params: { groupId },
+						user: { id: teacherId, userType: 'employee', role: 'teacher' },
+						body: { title: 'Algebra live lesson', durationMinutes: 45 },
+					})
+
+					assert.strictEqual(res.statusCode, 201)
+					assert.strictEqual(res.body.googleMeet.meetLink, 'https://meet.google.com/abc-defg-hij')
+					assert.strictEqual(res.body.googleMeet.status, 'scheduled')
+					assert.strictEqual(group.googleMeet.eventId, 'event-123')
+					assert.strictEqual(group.googleMeet.createdByName, 'Mr. Ahmed')
+					assert.strictEqual(createMeetEventCall.summary, 'Algebra live lesson')
+				},
+			)
+		})
+
+		await test('createGroupMeeting is blocked when the teacher has not connected Google', async () => {
+			const groupId = '507f1f77bcf86cd799439203'
+			const teacherId = '507f1f77bcf86cd799439204'
+			const group = {
+				_id: groupId,
+				name: 'Physics 201',
+				course: 'Physics',
+				googleMeet: { status: 'none' },
+				save: async () => {},
+			}
+			const teacher = {
+				_id: teacherId,
+				fullname: 'Ms. Karimova',
+				googleAccount: { connected: false, refreshToken: null },
+			}
+
+			await withPatchedMethods(
+				[
+					[Group, 'findById', async () => group],
+					[User, 'findById', () => makeQuery(teacher)],
+				],
+				async () => {
+					const res = await callHandler(meetController.createGroupMeeting, {
+						params: { groupId },
+						user: { id: teacherId, userType: 'employee', role: 'teacher' },
+						body: {},
+					})
+
+					assert.strictEqual(res.statusCode, 409)
+					assert.strictEqual(res.body.code, 'GOOGLE_ACCOUNT_NOT_CONNECTED')
+				},
+			)
+		})
+
+		await test('createGroupMeeting refuses to create a second active meeting for the same group', async () => {
+			const groupId = '507f1f77bcf86cd799439205'
+			const teacherId = '507f1f77bcf86cd799439206'
+			const group = {
+				_id: groupId,
+				name: 'Chemistry',
+				course: 'Chemistry',
+				googleMeet: { status: 'scheduled', meetLink: 'https://meet.google.com/existing-link' },
+				save: async () => {},
+			}
+			let createMeetEventCalled = false
+
+			await withPatchedMethods(
+				[
+					[Group, 'findById', async () => group],
+					[
+						require('../src/services/google-calendar.service'),
+						'createMeetEvent',
+						async () => {
+							createMeetEventCalled = true
+							return {}
 						},
+					],
+				],
+				async () => {
+					const res = await callHandler(meetController.createGroupMeeting, {
+						params: { groupId },
+						user: { id: teacherId, userType: 'employee', role: 'teacher' },
+						body: {},
+					})
+
+					assert.strictEqual(res.statusCode, 409)
+					assert.strictEqual(res.body.code, 'MEETING_ALREADY_EXISTS')
+					assert.strictEqual(createMeetEventCalled, false)
+				},
+			)
+		})
+
+		await test('getGroupMeeting returns null before any meeting has been created', async () => {
+			const groupId = '507f1f77bcf86cd799439207'
+			const group = { _id: groupId, name: 'Biology', course: 'Biology', googleMeet: { status: 'none' } }
+
+			await withPatchedMethods(
+				[[Group, 'findById', () => makeQuery(group)]],
+				async () => {
+					const res = await callHandler(meetController.getGroupMeeting, {
+						params: { groupId },
+						user: { id: '507f1f77bcf86cd799439208', userType: 'student' },
 					})
 
 					assert.strictEqual(res.statusCode, 200)
-					assert.strictEqual(res.body.total, 1)
-					assert.strictEqual(res.body.data[0].roomId, room.roomId)
-					assert(
-						capturedRoomsQuery.$or.some(
-							filter => filter.hostUserId?.$in?.includes(teacherId),
-						),
-					)
+					assert.strictEqual(res.body.googleMeet, null)
+				},
+			)
+		})
+
+		await test('endGroupMeeting deletes the Calendar event using the original creator credentials and marks it ended', async () => {
+			const groupId = '507f1f77bcf86cd799439209'
+			const creatorId = '507f1f77bcf86cd799439210'
+			const adminId = '507f1f77bcf86cd799439211'
+			const group = {
+				_id: groupId,
+				name: 'History',
+				course: 'History',
+				googleMeet: {
+					status: 'scheduled',
+					eventId: 'event-456',
+					meetLink: 'https://meet.google.com/abc-defg-hij',
+					createdBy: creatorId,
+					createdByName: 'Mr. Teacher',
+				},
+				save: async () => {},
+			}
+			const creator = { _id: creatorId, googleAccount: { connected: true, refreshToken: 'refresh-creator' } }
+			let deleteEventCall = null
+
+			await withPatchedMethods(
+				[
+					[Group, 'findById', async () => group],
+					[User, 'findById', () => makeQuery(creator)],
+					[
+						require('../src/services/google-calendar.service'),
+						'deleteEvent',
+						async params => {
+							deleteEventCall = params
+						},
+					],
+				],
+				async () => {
+					const res = await callHandler(meetController.endGroupMeeting, {
+						params: { groupId },
+						// Ended by an admin, not the original creator — should still use the creator's Google credentials.
+						user: { id: adminId, userType: 'employee', role: 'admin' },
+					})
+
+					assert.strictEqual(res.statusCode, 200)
+					assert.strictEqual(res.body.googleMeet.status, 'ended')
+					assert.strictEqual(group.googleMeet.status, 'ended')
+					assert.strictEqual(deleteEventCall.eventId, 'event-456')
+					assert.strictEqual(deleteEventCall.user._id, creatorId)
 				},
 			)
 		})

@@ -50,6 +50,23 @@ const locationSchema = new mongoose.Schema(
 	{ _id: false },
 )
 
+// Stores the teacher's connected Google account so the backend can create
+// Google Calendar events (with an attached Google Meet link) on their behalf.
+// Tokens are select:false so they are never returned by normal queries/toJSON.
+const googleAccountSchema = new mongoose.Schema(
+	{
+		connected: { type: Boolean, default: false },
+		googleId: { type: String, default: null },
+		email: { type: String, default: null, trim: true, lowercase: true },
+		refreshToken: { type: String, default: null, select: false },
+		accessToken: { type: String, default: null, select: false },
+		accessTokenExpiresAt: { type: Date, default: null, select: false },
+		scope: { type: String, default: null },
+		connectedAt: { type: Date, default: null },
+	},
+	{ _id: false },
+)
+
 const userSchema = new mongoose.Schema(
 	{
 		fullname: {
@@ -107,6 +124,10 @@ const userSchema = new mongoose.Schema(
 			type: locationSchema,
 			default: undefined,
 		},
+		googleAccount: {
+			type: googleAccountSchema,
+			default: () => ({}),
+		},
 		faceIdEnabled: {
 			type: Boolean,
 			default: false,
@@ -163,6 +184,11 @@ const hideSensitiveFields = (doc, ret) => {
 	delete ret.password
 	delete ret.refreshToken
 	delete ret.faceCredential
+	if (ret.googleAccount) {
+		delete ret.googleAccount.refreshToken
+		delete ret.googleAccount.accessToken
+		delete ret.googleAccount.accessTokenExpiresAt
+	}
 	return ret
 }
 

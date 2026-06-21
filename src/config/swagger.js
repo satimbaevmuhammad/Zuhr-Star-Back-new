@@ -31,7 +31,7 @@ const options = {
 			{ name: 'Finance', description: 'Employee finance — bonuses and fines' },
 			{ name: 'Forbidden', description: 'Forbidden behavior rules and employee violations' },
 			{ name: 'ExtraLessons', description: 'Extra lessons managed by up to 3 global support teachers' },
-			{ name: 'WebRTC', description: 'WebRTC rooms, attendance, chat, and signaling bootstrap' },
+			{ name: 'GoogleMeet', description: 'Connect a teacher Google account and create/manage Google Meet rooms for groups' },
 			{ name: 'Shop', description: 'Student shop system for purchasing items with coins' },
 			{ name: 'System', description: 'System endpoints' },
 		],

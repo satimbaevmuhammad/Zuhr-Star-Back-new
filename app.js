@@ -13,7 +13,7 @@ const forbiddenRoutes = require('./src/routes/forbidden.routes')
 const extraLessonRoutes = require('./src/routes/extra-lesson.routes')
 const leadRoutes = require('./src/routes/lead.routes')
 const shopRoutes = require('./src/routes/shop.routes')
-const webrtcRoutes = require('./src/routes/webrtc.routes')
+const googleRoutes = require('./src/routes/google.routes')
 const swaggerSpec = require('./src/config/swagger')
 const AppError = require('./src/utils/AppError')
 const errorHandler = require('./src/middleware/errorHandler')
@@ -110,18 +110,6 @@ app.get('/face-id-demo', (req, res) => {
 	res.sendFile(path.join(process.cwd(), 'public', 'face-id-demo.html'))
 })
 
-app.get('/teacher', (req, res) => {
-	res.sendFile(path.join(process.cwd(), 'public', 'teacher.html'))
-})
-
-app.get('/join', (req, res) => {
-	res.sendFile(path.join(process.cwd(), 'public', 'join.html'))
-})
-
-app.get('/meeting', (req, res) => {
-	res.sendFile(path.join(process.cwd(), 'public', 'meeting.html'))
-})
-
 app.get('/health', (req, res) => {
 	res.status(200).json({ status: 'ok' })
 })
@@ -142,7 +130,7 @@ app.use('/api/forbidden', forbiddenRoutes)
 app.use('/api/extra-lessons', extraLessonRoutes)
 app.use('/api/leads', leadRoutes)
 app.use('/api/shop', shopRoutes)
-app.use('/api/webrtc', webrtcRoutes)
+app.use('/api/google', googleRoutes)
 
 app.use((req, res, next) => {
 	next(new AppError('Route not found', 'ROUTE_NOT_FOUND', 404))

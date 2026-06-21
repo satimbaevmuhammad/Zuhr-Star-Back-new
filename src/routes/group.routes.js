@@ -6,6 +6,7 @@ const {
 	allowPermissionsOrStudent,
 } = require('../middleware/auth.middleware')
 const validateObjectId = require('../middleware/validateObjectId')
+const meetRoutes = require('./meet.routes')
 
 const router = express.Router()
 
@@ -382,6 +383,8 @@ router.patch(
 	validateObjectId('groupId', 'studentId'),
 	groupController.markGroupAttendanceStudent,
 )
+
+router.use('/:groupId/meet', validateObjectId('groupId'), meetRoutes)
 
 module.exports = router
 
