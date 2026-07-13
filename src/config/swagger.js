@@ -272,7 +272,7 @@ const options = {
 							type: 'string',
 							enum: ['submitted', 'approved'],
 						},
-						score: { type: 'number', example: 85 },
+						score: { type: 'integer', minimum: 0, maximum: 5, example: 4 },
 						attemptsCount: { type: 'integer', example: 1 },
 						submittedAt: { type: 'string', format: 'date-time' },
 						checkedBy: {

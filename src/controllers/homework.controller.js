@@ -7,6 +7,9 @@ const Student = require('../model/student.model')
 const HomeworkSubmission = require('../model/homework-submission.model')
 const { toPublicUrl } = require('../utils/public-url')
 
+// TODO: Re-enable automatic homework gating when the 0-100 pass-score workflow returns.
+// Keep the legacy implementation below behind this switch so the temporary change is reversible.
+const HOMEWORK_GATING_ENABLED = false
 const HOMEWORK_PASS_SCORE = 70
 
 const safeUnlinkIfExists = filePath => {
@@ -208,6 +211,12 @@ const resolveStudentGroupForLesson = async ({ studentDocument, lessonId, courseI
 }
 
 const ensureHomeworkUnlocked = async ({ studentId, lesson, group }) => {
+	// TODO: Re-enable automatic homework gating.
+	// Homework ratings are informational while the temporary 0-5 teacher-rating workflow is active.
+	if (!HOMEWORK_GATING_ENABLED) {
+		return { ok: true }
+	}
+
 	const lessonFilter = { course: lesson.course }
 	if (Array.isArray(group?.lessons) && group.lessons.length > 0) {
 		lessonFilter._id = { $in: group.lessons }
@@ -534,7 +543,8 @@ exports.getStudentHomework = async (req, res) => {
 			student: req.student._id,
 		}).select('status score attemptsCount checkedAt submittedAt history') // FIX [6]: Return student submission history in homework lesson response
 
-		if (!unlockCheck.ok) {
+		// TODO: Re-enable automatic homework gating.
+		if (HOMEWORK_GATING_ENABLED && !unlockCheck.ok) {
 			return res.status(200).json({
 				lessonId,
 				courseId: lesson.course,
@@ -625,7 +635,8 @@ exports.submitStudentHomework = async (req, res) => {
 			lesson,
 			group: groupResult.group,
 		})
-		if (!unlockCheck.ok) {
+		// TODO: Re-enable automatic homework gating.
+		if (HOMEWORK_GATING_ENABLED && !unlockCheck.ok) {
 			safeUnlinkIfExists(uploadedFilePath)
 			return res.status(422).json({
 				message: 'Submission blocked',
@@ -641,7 +652,9 @@ exports.submitStudentHomework = async (req, res) => {
 		const existingSubmission = await HomeworkSubmission.findOne(submissionFilter).select(
 			'status documents',
 		)
-		if (existingSubmission && existingSubmission.status === 'approved') {
+		// TODO: Re-enable automatic homework gating.
+		// Approved submissions remain editable so a rating never forces or prevents re-uploading.
+		if (HOMEWORK_GATING_ENABLED && existingSubmission && existingSubmission.status === 'approved') {
 			safeUnlinkIfExists(uploadedFilePath)
 			return res.status(400).json({
 				message: 'Cannot resubmit an already approved homework',
@@ -794,8 +807,8 @@ exports.gradeHomeworkSubmission = async (req, res) => {
 		}
 
 		const score = Number(req.body.score)
-		if (!Number.isFinite(score) || score < 0 || score > 100) {
-			return res.status(400).json({ message: 'score must be between 0 and 100' })
+		if (!Number.isInteger(score) || score < 0 || score > 5) {
+			return res.status(400).json({ message: 'score must be an integer between 0 and 5' })
 		}
 
 		const submission = await HomeworkSubmission.findById(submissionId)
@@ -809,7 +822,9 @@ exports.gradeHomeworkSubmission = async (req, res) => {
 		}
 
 		submission.score = score
-		submission.status = score >= HOMEWORK_PASS_SCORE ? 'approved' : 'submitted'
+		// TODO: Re-enable automatic homework gating.
+		// "approved" now only means a teacher reviewed the submission; it is not a passing result.
+		submission.status = 'approved'
 		submission.checkedBy = req.user._id
 		submission.checkedAt = new Date()
 

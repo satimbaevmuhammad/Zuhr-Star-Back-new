@@ -144,7 +144,7 @@ const homeworkSubmissionSchema = new mongoose.Schema(
 		score: {
 			type: Number,
 			min: 0,
-			max: 100,
+			max: 5,
 			default: null,
 		},
 		attemptsCount: {

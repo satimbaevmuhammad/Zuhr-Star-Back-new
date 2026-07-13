@@ -517,6 +517,47 @@ const computeBalanceDelta = (previousStatus, newStatus, perLessonCost) => {
 	return 0
 }
 
+const getScheduledLessonsInCurrentMonth = (group, now = new Date()) => {
+	const localNow = toAttendanceLocalDate(now)
+	if (!localNow) return 0
+
+	const scheduledDays = new Set(
+		(group.schedule || [])
+			.map(item => String(item?.dayOfWeek || '').trim().toLowerCase())
+			.filter(day => DAYS_OF_WEEK.includes(day)),
+	)
+	if (scheduledDays.size === 0) return 0
+
+	const year = localNow.getUTCFullYear()
+	const month = localNow.getUTCMonth()
+	const daysInMonth = new Date(Date.UTC(year, month + 1, 0)).getUTCDate()
+	let lessonsCount = 0
+
+	for (let day = 1; day <= daysInMonth; day += 1) {
+		const date = new Date(Date.UTC(year, month, day))
+		const dayOfWeek = DAYS_OF_WEEK[(date.getUTCDay() + 6) % DAYS_OF_WEEK.length]
+		if (scheduledDays.has(dayOfWeek)) lessonsCount += 1
+	}
+
+	return lessonsCount
+}
+
+const getMonthlyCourseLessonPrice = async group => {
+	let course = null
+	if (group.courseRef) {
+		course = await Course.findById(group.courseRef).select('price')
+	}
+	// Keep legacy groups working while all new groups use courseRef.
+	if (!course && group.course) {
+		course = await Course.findOne({ name: group.course }).select('price')
+	}
+
+	const lessonsInCurrentMonth = getScheduledLessonsInCurrentMonth(group)
+	if (!course || lessonsInCurrentMonth <= 0) return 0
+
+	return Number(course.price || 0) / lessonsInCurrentMonth
+}
+
 const runBalanceResetSafely = async () => {
 	try {
 		await resetStudentBalancesIfNeeded()
@@ -1551,7 +1592,7 @@ exports.upsertGroupAttendance = async (req, res) => {
 			})
 		}
 
-		// load full student documents to allow payable calculations per student
+		// Keep loading membership documents for the existing attendance validation.
 		const activeMembers = await Student.find({
 			_id: { $in: studentIds },
 			groups: {
@@ -1570,6 +1611,7 @@ exports.upsertGroupAttendance = async (req, res) => {
 
 		const markedBy = req.user?._id
 		const balanceDeltas = []
+		const perLesson = await getMonthlyCourseLessonPrice(group)
 
 		// Map students for quick lookup
 		const studentsMap = new Map(activeMembers.map(s => [s._id.toString(), s]))
@@ -1599,8 +1641,6 @@ exports.upsertGroupAttendance = async (req, res) => {
 				modifierId: req.user?._id,
 			})
 
-			const payable = require('../services/finance.service').computeStudentPayableAmount(studentDoc)
-			const perLesson = payable / 12
 			const delta = computeBalanceDelta(previousStatus, record.status, perLesson)
 			if (delta !== 0) {
 				balanceDeltas.push({ studentId: record.student, delta })
@@ -1703,7 +1743,7 @@ exports.markGroupAttendanceStudent = async (req, res) => {
 			})
 		}
 
-		// load student to compute payable per-lesson
+		// Keep loading the student to preserve the existing active-member validation flow.
 		const studentDoc = await Student.findById(studentId)
 		if (!studentDoc) {
 			return res.status(404).json({ message: 'Student not found' })
@@ -1728,8 +1768,7 @@ exports.markGroupAttendanceStudent = async (req, res) => {
 
 		await group.save()
 
-		const payable = require('../services/finance.service').computeStudentPayableAmount(studentDoc)
-		const perLesson = payable / 12
+		const perLesson = await getMonthlyCourseLessonPrice(group)
 		const balanceDelta = computeBalanceDelta(previousStatus, parsedPayload.status, perLesson)
 		if (balanceDelta !== 0) {
 			await Student.findByIdAndUpdate(studentId, { $inc: { balance: balanceDelta } })

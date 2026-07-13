@@ -31,7 +31,7 @@ const router = express.Router()
  *       400:
  *         description: Invalid id
  *       403:
- *         description: Homework locked or not enrolled
+ *         description: Student is not enrolled in the lesson
  *       404:
  *         description: Lesson not found
  */
@@ -87,9 +87,7 @@ router.get(
  *       400:
  *         description: Validation failed
  *       403:
- *         description: Homework locked or not enrolled
- *       409:
- *         description: Homework already approved
+ *         description: Student is not enrolled in the lesson
  */
 router.post(
 	'/lessons/:lessonId/submissions',
@@ -215,9 +213,9 @@ router.get('/submissions', requireAuth, homeworkController.listHomeworkSubmissio
  *             required: [score]
  *             properties:
  *               score:
- *                 type: number
+ *                 type: integer
  *                 minimum: 0
- *                 maximum: 100
+ *                 maximum: 5
  *     responses:
  *       200:
  *         description: Submission graded
