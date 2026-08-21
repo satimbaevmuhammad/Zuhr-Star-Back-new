@@ -12,6 +12,8 @@ const FINANCIAL_EVENT_TYPES = [
 	'salary_update',
 	'student_payment',
 	'student_discount',
+	'lesson_charge',
+	'attendance_adjustment',
 	'extra_lesson_payment',
 	'teacher_payment',
 ]
@@ -60,6 +62,12 @@ const financialEventSchema = new mongoose.Schema(
 			ref: 'Group',
 			default: null,
 		},
+		courseId: { type: mongoose.Schema.Types.ObjectId, ref: 'Course', default: null },
+		allocationBucket: { type: String, enum: ['assigned', 'unassigned'], default: 'unassigned' },
+		attendanceKey: { type: String, default: null },
+		lessonRate: { type: Number, default: null },
+		lessonsScheduledThisMonth: { type: Number, default: null },
+		relatedEventId: { type: mongoose.Schema.Types.ObjectId, ref: 'FinancialEvent', default: null },
 		createdBy: {
 			type: mongoose.Schema.Types.ObjectId,
 			ref: 'User',

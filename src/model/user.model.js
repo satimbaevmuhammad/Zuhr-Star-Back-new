@@ -79,15 +79,15 @@ const userSchema = new mongoose.Schema(
 		phone: {
 			type: String,
 			required: true,
-			unique: true,
 			trim: true,
+			unique: false,
 			match: [/^\+?[0-9]{7,15}$/, 'Phone must contain 7-15 digits'],
 		},
 		email: {
 			type: String,
 			required: true,
-			unique: true,
 			trim: true,
+			unique: false,
 			lowercase: true,
 			match: [/^[^\s@]+@[^\s@]+\.[^\s@]+$/, 'Invalid email format'],
 		},

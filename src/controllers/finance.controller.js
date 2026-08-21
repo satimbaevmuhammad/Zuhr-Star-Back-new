@@ -2,6 +2,8 @@ const mongoose = require('mongoose')
 
 const User = require('../model/user.model')
 const Student = require('../model/student.model')
+const Group = require('../model/group.model')
+const Course = require('../model/course.model')
 const { FinancialEvent, FINANCIAL_EVENT_TYPES, getCurrentMonth } = require('../models/FinancialEvent.model')
 const {
 	getFinanceSummary,
@@ -363,6 +365,19 @@ exports.setStudentDiscount = async (req, res) => {
 		const student = await Student.findById(studentId)
 		if (!student) return res.status(404).json({ message: 'Student not found' })
 
+		let courseId = req.body.courseId || null
+		let groupId = req.body.groupId || null
+		if (groupId && !mongoose.isValidObjectId(groupId)) return res.status(400).json({ message: 'Invalid groupId' })
+		if (courseId && !mongoose.isValidObjectId(courseId)) return res.status(400).json({ message: 'Invalid courseId' })
+		if (groupId) {
+			const group = await Group.findById(groupId).select('_id courseRef')
+			if (!group?.courseRef) return res.status(400).json({ message: 'group must be linked to a course' })
+			if (courseId && String(courseId) !== String(group.courseRef)) return res.status(400).json({ message: 'courseId does not match groupId' })
+			courseId = group.courseRef
+		}
+		if (!courseId && student.discountCourseId) courseId = student.discountCourseId
+		if (!courseId) return res.status(400).json({ message: 'courseId or groupId is required to apply a discount' })
+		if (courseId && !(await Course.exists({ _id: courseId }))) return res.status(404).json({ message: 'Course not found' })
 		const originalCoursePrice = typeof req.body.originalCoursePrice === 'undefined' ? student.originalCoursePrice || 0 : Number(req.body.originalCoursePrice)
 		const activeDiscountAmount = typeof req.body.activeDiscountAmount === 'undefined' ? student.activeDiscountAmount || 0 : Number(req.body.activeDiscountAmount)
 
@@ -373,6 +388,7 @@ exports.setStudentDiscount = async (req, res) => {
 		student.originalCoursePrice = originalCoursePrice
 		student.activeDiscountAmount = activeDiscountAmount
 		student.payableCourseAmount = Math.max(0, originalCoursePrice - activeDiscountAmount)
+		student.discountCourseId = courseId || null
 		await student.save()
 
 		// append financial event for audit
@@ -380,6 +396,9 @@ exports.setStudentDiscount = async (req, res) => {
 			studentId: student._id,
 			type: 'student_discount',
 			amount: activeDiscountAmount,
+			courseId: courseId || null,
+			groupId: groupId || null,
+			allocationBucket: courseId || groupId ? 'assigned' : 'unassigned',
 			note: String(req.body.note || 'Student discount updated'),
 			createdBy: req.user && req.user.id,
 		})
@@ -515,11 +534,18 @@ exports.addStudentPayment = async (req, res) => {
 		}
 
 		let groupId = null
+		let courseId = null
+		if (!req.body.groupId) {
+			return res.status(400).json({ message: 'groupId is required to attribute a student payment' })
+		}
 		if (req.body.groupId) {
 			if (!mongoose.isValidObjectId(req.body.groupId)) {
 				return res.status(400).json({ message: 'Invalid groupId' })
 			}
-			groupId = req.body.groupId
+			const group = await Group.findById(req.body.groupId).select('_id courseRef')
+			if (!group) return res.status(404).json({ message: 'Group not found' })
+			groupId = group._id
+			courseId = group.courseRef || null
 		}
 
 		const note = String(req.body.note || '').trim()
@@ -531,6 +557,8 @@ exports.addStudentPayment = async (req, res) => {
 			note,
 			studentId,
 			groupId,
+			courseId,
+			allocationBucket: groupId ? 'assigned' : 'unassigned',
 			createdBy: req.user.id,
 		})
 

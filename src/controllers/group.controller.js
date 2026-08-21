@@ -6,6 +6,8 @@ const Student = require('../model/student.model')
 const User = require('../model/user.model')
 const { syncCourseGroupsCount } = require('../services/course-sync.service')
 const { resetStudentBalancesIfNeeded } = require('../services/student-balance-reset.service')
+const { FinancialEvent } = require('../models/FinancialEvent.model')
+const { buildLessonPricing, getRefundAmount } = require('../services/attendance-billing.service')
 
 const DAYS_OF_WEEK = [
 	'monday',
@@ -517,6 +519,37 @@ const computeBalanceDelta = (previousStatus, newStatus, perLessonCost) => {
 	return 0
 }
 
+const getAttendanceMonth = date => {
+	const localDate = toAttendanceLocalDate(date)
+	if (!localDate) return null
+	return `${localDate.getUTCFullYear()}-${String(localDate.getUTCMonth() + 1).padStart(2, '0')}`
+}
+
+const getAttendanceKey = ({ groupId, studentId, date }) =>
+	`${groupId}:${studentId}:${toAttendanceDateKey(date)}`
+
+const buildAttendanceFinanceEvent = ({ studentId, groupId, courseId, date, previousStatus, status, delta, actorId, pricing, relatedEventId }) => {
+	if (!delta) return null
+	const isInitialLessonCharge = !CHARGED_STATUSES.has(previousStatus) && CHARGED_STATUSES.has(status)
+	return {
+		type: isInitialLessonCharge ? 'lesson_charge' : 'attendance_adjustment',
+		amount: delta,
+		month: getAttendanceMonth(date),
+		note: isInitialLessonCharge
+			? `Lesson charge for ${toAttendanceDateKey(date)} (${status})`
+			: `Attendance correction for ${toAttendanceDateKey(date)}: ${previousStatus || 'no record'} to ${status}`,
+		studentId,
+		groupId,
+		courseId: courseId || null,
+		allocationBucket: groupId ? 'assigned' : 'unassigned',
+		attendanceKey: getAttendanceKey({ groupId, studentId, date }),
+		lessonRate: pricing?.lessonPrice ?? null,
+		lessonsScheduledThisMonth: pricing?.lessonsScheduledThisMonth ?? null,
+		relatedEventId: relatedEventId || null,
+		createdBy: actorId,
+	}
+}
+
 const getScheduledLessonsInCurrentMonth = (group, now = new Date()) => {
 	const localNow = toAttendanceLocalDate(now)
 	if (!localNow) return 0
@@ -542,7 +575,9 @@ const getScheduledLessonsInCurrentMonth = (group, now = new Date()) => {
 	return lessonsCount
 }
 
-const getMonthlyCourseLessonPrice = async group => {
+// Policy: retain the existing live monthly schedule calculation. Each charge stores
+// its exact rate and denominator, so later schedule edits cannot change its audit trail.
+const getMonthlyCourseLessonPrice = async (group, student = null) => {
 	let course = null
 	if (group.courseRef) {
 		course = await Course.findById(group.courseRef).select('price')
@@ -553,9 +588,8 @@ const getMonthlyCourseLessonPrice = async group => {
 	}
 
 	const lessonsInCurrentMonth = getScheduledLessonsInCurrentMonth(group)
-	if (!course || lessonsInCurrentMonth <= 0) return 0
-
-	return Number(course.price || 0) / lessonsInCurrentMonth
+	if (!course || lessonsInCurrentMonth <= 0) return { course: null, lessonPrice: 0, lessonsScheduledThisMonth: lessonsInCurrentMonth }
+	return { course, ...buildLessonPricing({ coursePrice: course.price, student, courseId: course._id, lessonsScheduledThisMonth: lessonsInCurrentMonth }) }
 }
 
 const runBalanceResetSafely = async () => {
@@ -1611,8 +1645,6 @@ exports.upsertGroupAttendance = async (req, res) => {
 
 		const markedBy = req.user?._id
 		const balanceDeltas = []
-		const perLesson = await getMonthlyCourseLessonPrice(group)
-
 		// Map students for quick lookup
 		const studentsMap = new Map(activeMembers.map(s => [s._id.toString(), s]))
 
@@ -1641,9 +1673,21 @@ exports.upsertGroupAttendance = async (req, res) => {
 				modifierId: req.user?._id,
 			})
 
-			const delta = computeBalanceDelta(previousStatus, record.status, perLesson)
+			const pricing = await getMonthlyCourseLessonPrice(group, studentDoc)
+			let delta = computeBalanceDelta(previousStatus, record.status, pricing.lessonPrice)
 			if (delta !== 0) {
-				balanceDeltas.push({ studentId: record.student, delta })
+				let relatedEventId = null
+				if (delta > 0 && CHARGED_STATUSES.has(previousStatus)) {
+					const originalCharge = await FinancialEvent.findOne({
+						studentId: record.student, groupId, type: 'lesson_charge',
+						attendanceKey: getAttendanceKey({ groupId, studentId: record.student, date }),
+					}).sort({ createdAt: -1, _id: -1 })
+					if (originalCharge) {
+						delta = getRefundAmount(originalCharge)
+						relatedEventId = originalCharge._id
+					}
+				}
+				balanceDeltas.push({ studentId: record.student, delta, previousStatus, status: record.status, pricing, courseId: pricing.course?._id, relatedEventId })
 			}
 		}
 
@@ -1654,6 +1698,16 @@ exports.upsertGroupAttendance = async (req, res) => {
 				balanceDeltas.map(({ studentId, delta }) =>
 					Student.findByIdAndUpdate(studentId, { $inc: { balance: delta } }),
 				),
+			)
+			await FinancialEvent.create(
+				balanceDeltas.map(item =>
+					buildAttendanceFinanceEvent({
+						...item,
+						groupId,
+						date,
+						actorId: req.user._id,
+					}),
+				).filter(Boolean),
 			)
 		}
 
@@ -1768,10 +1822,35 @@ exports.markGroupAttendanceStudent = async (req, res) => {
 
 		await group.save()
 
-		const perLesson = await getMonthlyCourseLessonPrice(group)
-		const balanceDelta = computeBalanceDelta(previousStatus, parsedPayload.status, perLesson)
+		const pricing = await getMonthlyCourseLessonPrice(group, studentDoc)
+		let balanceDelta = computeBalanceDelta(previousStatus, parsedPayload.status, pricing.lessonPrice)
+		let relatedEventId = null
+		if (balanceDelta > 0 && CHARGED_STATUSES.has(previousStatus)) {
+			const originalCharge = await FinancialEvent.findOne({
+				studentId, groupId, type: 'lesson_charge',
+				attendanceKey: getAttendanceKey({ groupId, studentId, date: parsedPayload.date }),
+			}).sort({ createdAt: -1, _id: -1 })
+			if (originalCharge) {
+				balanceDelta = getRefundAmount(originalCharge)
+				relatedEventId = originalCharge._id
+			}
+		}
 		if (balanceDelta !== 0) {
 			await Student.findByIdAndUpdate(studentId, { $inc: { balance: balanceDelta } })
+			await FinancialEvent.create(
+				buildAttendanceFinanceEvent({
+					studentId,
+					groupId,
+					courseId: pricing.course?._id,
+					date: parsedPayload.date,
+					previousStatus,
+					status: parsedPayload.status,
+					delta: balanceDelta,
+					pricing,
+					relatedEventId,
+					actorId: req.user._id,
+				}),
+			)
 		}
 
 		const updatedGroup = await Group.findById(groupId)

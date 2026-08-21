@@ -129,6 +129,11 @@ const studentSchema = new mongoose.Schema(
 			default: 0,
 			min: 0,
 		},
+		discountCourseId: {
+			type: mongoose.Schema.Types.ObjectId,
+			ref: 'Course',
+			default: null,
+		},
 		groups: {
 			type: [studentGroupSchema],
 			default: [],

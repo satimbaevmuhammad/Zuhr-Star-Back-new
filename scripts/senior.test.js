@@ -25,6 +25,7 @@ const {
 	getGroupsCountByCourseIds,
 	syncCourseGroupsCount,
 } = require('../src/services/course-sync.service')
+const { getStudentFinancialSummaries } = require('../src/services/student-finance-summary.service')
 
 const User = require('../src/model/user.model')
 const Student = require('../src/model/student.model')
@@ -34,6 +35,8 @@ const Lesson = require('../src/model/lesson.model')
 const ExtraLesson = require('../src/model/extra-lesson.model').ExtraLesson
 const Role = require('../src/models/Role.model')
 const FaceCredential = require('../src/models/FaceCredential.model')
+const { FinancialEvent } = require('../src/models/FinancialEvent.model')
+const { buildLessonPricing, getRefundAmount } = require('../src/services/attendance-billing.service')
 
 const DAYS_OF_WEEK = [
 	'sunday',
@@ -1530,7 +1533,7 @@ const runTests = async () => {
 			)
 		})
 
-		await test('student balance reset service throttles repeated non-forced calls', async () => {
+		await test('student balance reset service never wipes running balances', async () => {
 			let updateManyCalls = 0
 			await withPatchedMethods(
 				[
@@ -1547,12 +1550,81 @@ const runTests = async () => {
 					const first = await resetStudentBalancesIfNeeded({ force: true })
 					const second = await resetStudentBalancesIfNeeded()
 
-					assert.strictEqual(first.skipped, false)
+					assert.strictEqual(first.skipped, true)
+					assert.strictEqual(first.reason, 'balance_reset_disabled')
 					assert.strictEqual(second.skipped, true)
-					assert.strictEqual(second.reason, 'throttled')
-					assert.strictEqual(updateManyCalls, 1)
+					assert.strictEqual(second.reason, 'balance_reset_disabled')
+					assert.strictEqual(updateManyCalls, 0)
 				},
 			)
+		})
+
+		await test('student financial summary derives active monthly fees and debt', async () => {
+			const studentId = new mongoose.Types.ObjectId()
+			const courseId = new mongoose.Types.ObjectId()
+			const courseGroupId = new mongoose.Types.ObjectId()
+			const legacyGroupId = new mongoose.Types.ObjectId()
+
+			await withPatchedMethods(
+				[
+					[
+						Group,
+						'find',
+						() => makeQuery([
+							{ _id: courseGroupId, name: 'Course group', course: 'Old name', courseRef: courseId, monthlyFee: 1 },
+							{ _id: legacyGroupId, name: 'Legacy group', course: 'Legacy course', courseRef: null, monthlyFee: 200000 },
+						]),
+					],
+					[Course, 'find', () => makeQuery([{ _id: courseId, name: 'Current course', price: 800000 }])],
+					[FinancialEvent, 'aggregate', async () => [
+						{ _id: { studentId, groupId: courseGroupId }, balance: -100000 },
+						{ _id: { studentId, groupId: legacyGroupId }, balance: 200000 },
+					]],
+				],
+				async () => {
+					const summaries = await getStudentFinancialSummaries({
+						_id: studentId,
+						balance: -50000,
+						groups: [
+							{ group: courseGroupId, status: 'active' },
+							{ group: legacyGroupId, status: 'active' },
+							{ group: new mongoose.Types.ObjectId(), status: 'left' },
+						],
+					})
+					const summary = summaries.get(String(studentId))
+					assert.strictEqual(summary.monthlyFee, 1000000)
+					assert.strictEqual(summary.debt, 50000)
+					assert.strictEqual(summary.monthlyFees.length, 2)
+					assert.strictEqual(summary.monthlyFees[0].monthlyFee, 800000)
+					assert.strictEqual(summary.groups[0].paymentStatus, 'overdue')
+					assert.strictEqual(summary.groups[1].paymentStatus, 'paid')
+				},
+			)
+		})
+
+		await test('discounted lesson charge and correction use the exact original rate', async () => {
+			const pricing = buildLessonPricing({
+				coursePrice: 800000,
+				courseId: new mongoose.Types.ObjectId(),
+				student: { discountCourseId: null, activeDiscountAmount: 100000, payableCourseAmount: 700000 },
+				lessonsScheduledThisMonth: 10,
+			})
+			assert.strictEqual(pricing.lessonPrice, 80000)
+			const courseId = new mongoose.Types.ObjectId()
+			const discounted = buildLessonPricing({ coursePrice: 800000, courseId, student: { discountCourseId: courseId, activeDiscountAmount: 100000, payableCourseAmount: 700000 }, lessonsScheduledThisMonth: 10 })
+			assert.strictEqual(discounted.lessonPrice, 70000)
+			assert.strictEqual(getRefundAmount({ amount: -70000, lessonRate: 70000 }), 70000)
+		})
+
+		await test('financial ledger accepts attendance charge event types', async () => {
+			const event = new FinancialEvent({
+				type: 'lesson_charge',
+				amount: -20000,
+				studentId: new mongoose.Types.ObjectId(),
+				groupId: new mongoose.Types.ObjectId(),
+				createdBy: new mongoose.Types.ObjectId(),
+			})
+			await event.validate()
 		})
 
 		await test('course model rejects duplicate methodology lessons', async () => {

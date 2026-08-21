@@ -173,39 +173,46 @@ const sanitizeUser = (userDocument, req) => {
 }
 
 exports.login = async (req, res) => {
-	try {
-		const phone = String(req.body.phone || '').trim()
-		const password = req.body.password
+    try {
+        const phone = String(req.body.phone || '').trim()
+        const password = req.body.password
 
-		if (!phone || !password) {
-			return res.status(400).json({ message: 'Phone and password required' })
-		}
+        if (!phone || !password) {
+            return res.status(400).json({ message: 'Phone and password required' })
+        }
 
-		const user = await User.findOne({ phone }).select('+password +refreshToken')
-		if (!user) {
-			return res.status(404).json({ message: 'User not found' })
-		}
+        const candidates = await User.find({ phone }).select('+password +refreshToken')
+        if (candidates.length === 0) {
+            return res.status(404).json({ message: 'User not found' })
+        }
 
-		const isMatch = await bcrypt.compare(password, user.password)
-		if (!isMatch) {
-			return res.status(401).json({ message: 'Invalid credentials' })
-		}
+        let user = null
+        for (const candidate of candidates) {
+            if (await bcrypt.compare(password, candidate.password)) {
+                user = candidate
+                break
+            }
+        }
 
-		const accessToken = generateAccessToken(user)
-		const refreshToken = generateRefreshToken(user)
+        if (!user) {
+            return res.status(401).json({ message: 'Invalid credentials' })
+        }
 
-		user.refreshToken = refreshToken
-		await user.save({ validateBeforeSave: false })
+        const accessToken = generateAccessToken(user)
+        const refreshToken = generateRefreshToken(user)
 
-		res.status(200).json({
-			accessToken,
-			refreshToken,
-			user: sanitizeUser(user, req),
-		})
-	} catch (error) {
-		console.error('Login failed:', error)
-		return res.status(500).json({ message: 'Internal server error' , error: error.message})
-	}
+        user.refreshToken = refreshToken
+        await user.save({ validateBeforeSave: false })
+
+        res.status(200).json({
+            accessToken,
+            refreshToken,
+            user: sanitizeUser(user, req),
+        })
+    } catch (error) {
+        console.error('Login failed:', error)
+        return res.status(500).json({ message: 'Internal server error', error: error.message })
+    }
 }
 
 exports.updateFaceId = async (req, res) => {
@@ -516,14 +523,6 @@ exports.register = async (req, res) => {
 		const parsedDate = new Date(dateOfBirth)
 		if (Number.isNaN(parsedDate.getTime())) {
 			return fail(400, 'Invalid dateOfBirth value')
-		}
-
-		const existingUser = await User.findOne({
-			$or: [{ phone }, { email }],
-		})
-		if (existingUser) {
-			const duplicateField = existingUser.phone === phone ? 'Phone' : 'Email'
-			return fail(409, `${duplicateField} already exists`)
 		}
 
 		const hashedPassword = await bcrypt.hash(password, 12)

@@ -4,6 +4,7 @@ const mongoose = require('mongoose')
 const Group = require('../model/group.model')
 const Student = require('../model/student.model')
 const { resetStudentBalancesIfNeeded } = require('../services/student-balance-reset.service')
+const { getStudentFinancialSummaries } = require('../services/student-finance-summary.service')
 const {
 	generateStudentAccessToken,
 	generateStudentRefreshToken,
@@ -19,6 +20,21 @@ const sanitizeStudent = studentDocument => {
 	delete obj.password
 	delete obj.balanceResetAt
 	return obj
+}
+
+const attachFinancialSummaries = async students => {
+	const studentList = Array.isArray(students) ? students : [students]
+	const summaries = await getStudentFinancialSummaries(studentList)
+	return studentList.map(student => {
+		const normalized = sanitizeStudent(student)
+		normalized.financial = summaries.get(String(student._id)) || {
+			balance: Number(normalized.balance) || 0,
+			monthlyFee: 0,
+			debt: Math.max(0, -(Number(normalized.balance) || 0)),
+			monthlyFees: [],
+		}
+		return normalized
+	})
 }
 
 const isBcryptHash = value =>
@@ -93,10 +109,11 @@ exports.loginStudent = async (req, res) => {
 		student.refreshToken = refreshToken
 		await student.save({ validateBeforeSave: false })
 
+		const [studentWithFinancial] = await attachFinancialSummaries(student)
 		return res.status(200).json({
 			accessToken,
 			refreshToken,
-			student: sanitizeStudent(student),
+			student: studentWithFinancial,
 		})
 	} catch (error) {
 		console.error('Student login failed:', error)
@@ -444,9 +461,10 @@ exports.createStudent = async (req, res) => {
 			})
 		}
 
+		const [studentWithFinancial] = await attachFinancialSummaries(student)
 		return res.status(201).json({
 			message: 'Student created successfully',
-			student,
+			student: studentWithFinancial,
 		})
 	} catch (error) {
 		if (error.code === 11000) {
@@ -494,11 +512,12 @@ exports.getStudents = async (req, res) => {
 			Student.countDocuments(query),
 		])
 
+		const studentsWithFinancial = await attachFinancialSummaries(students)
 		return res.status(200).json({
 			page,
 			limit,
 			total,
-			data: students,
+			data: studentsWithFinancial,
 		})
 	} catch (error) {
 		console.error('Get students failed:', error)
@@ -523,7 +542,8 @@ exports.getStudentById = async (req, res) => {
 			return res.status(404).json({ message: 'Student not found' })
 		}
 
-		return res.status(200).json({ student })
+		const [studentWithFinancial] = await attachFinancialSummaries(student)
+		return res.status(200).json({ student: studentWithFinancial })
 	} catch (error) {
 		console.error('Get student by id failed:', error)
 		return res.status(500).json({ message: 'Internal server error' })
@@ -569,12 +589,14 @@ exports.getStudentGroups = async (req, res) => {
 			note: groupItem.note,
 		}))
 
+		const [studentWithFinancial] = await attachFinancialSummaries(student)
 		return res.status(200).json({
 			page: 1,
 			limit: normalizedGroups.length,
 			total: normalizedGroups.length,
 			studentId: student._id,
 			groupAttached: student.groupAttached,
+			financial: studentWithFinancial.financial,
 			data: normalizedGroups,
 		})
 	} catch (error) {
@@ -808,9 +830,10 @@ exports.updateStudent = async (req, res) => {
 			'name course courseRef lessons groupType level status',
 		)
 
+		const [studentWithFinancial] = await attachFinancialSummaries(updatedStudent)
 		return res.status(200).json({
 			message: 'Student updated successfully',
-			student: updatedStudent,
+			student: studentWithFinancial,
 		})
 	} catch (error) {
 		if (error.code === 11000) {
