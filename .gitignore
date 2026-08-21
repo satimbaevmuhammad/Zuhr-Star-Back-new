@@ -22,6 +22,8 @@ build/
 .next/
 out/
 .vercel/
+uploads/
+.claude/
 
 # =========================
 # Logs
